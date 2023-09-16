@@ -16,6 +16,6 @@ implement useful as a learning tool.
 
 ## Current Features and Expected Behavior (Current Implementation)
 
-| command                | outcome | 
-|------------------------|---------|
-| mini-ls | lists all files and directories in the current folder, where the program is executed |
+| command                | outcome                                                                                                             | 
+|------------------------|---------------------------------------------------------------------------------------------------------------------|
+| mini-ls | lists all files and directories in the current folder, where the program is executed and prepends each with an icon |

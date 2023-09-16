@@ -1,3 +1,5 @@
+pub mod arg_processing;
+
 pub mod runner {
     use std::fs;
     use std::fs::{DirEntry, ReadDir};
