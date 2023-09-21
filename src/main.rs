@@ -1,9 +1,17 @@
-use std::env;
-use mini_ls::runner::list_contents;
+use std::{env, process};
+use std::error::Error;
+use mini_ls::{manage_output};
 use mini_ls::arg_processing::Config;
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
   let args: Vec<String> = env::args().collect();
   let config = Config::new(args);
-  println!("{}", list_contents(config.target.as_str()));
+  let result = manage_output(config);
+  match result {
+    Ok(()) => Ok(()),
+    Err(error) => {
+      println!("Unable to read directory due to {}", error);
+      process::exit(1);
+    }
+  }
 }
