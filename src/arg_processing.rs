@@ -41,13 +41,13 @@ fn parse_file_output_args(flags: &Vec<Flag>, args: &Vec<String>) -> (bool, Strin
   match f_arg {
     Some(flag) => match &flag.flag_option_text {
       Some(option_text) => (true, option_text.to_string(), flag.flag_option_index),
-      None => find_out_file(flag, args),
+      None => find_out_file_via_index(flag, args),
     },
     None => (false, "".to_string(), None),
   }
 }
 
-fn find_out_file(flag: &Flag, args: &Vec<String>) -> (bool, String, Option<usize>){
+fn find_out_file_via_index(flag: &Flag, args: &Vec<String>) -> (bool, String, Option<usize>){
   match flag.flag_option_index {
     Some(option_index) => {
       (true, match args.get(option_index) {
@@ -109,8 +109,22 @@ mod tests {
   }
 
   #[test]
-  fn target_dir_is_working_dir_if_unsupplied() {
+  fn target_dir_is_working_dir_if_unsupplied_with_concat_args() {
     let args = vec![String::from("./mini-ls"), String::from("-Flog.txt")];
+    let config = get_target(args);
+    assert_eq!(config.target, "./");
+  }
+
+  #[test]
+  fn target_dir_is_working_dir_if_unsupplied_with_args() {
+    let args = vec![String::from("./mini-ls"), String::from("-F"), String::from("log.txt")];
+    let config = get_target(args);
+    assert_eq!(config.target, "./");
+  }
+
+  #[test]
+  fn target_dir_is_working_dir_if_unsupplied_with_no_args() {
+    let args = vec![String::from("./mini-ls")];
     let config = get_target(args);
     assert_eq!(config.target, "./");
   }

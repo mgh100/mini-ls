@@ -16,8 +16,9 @@ implement useful as a learning tool.
 
 ## Current Features and Expected Behavior (Current Implementation)
 
-| command          | outcome                                                                                |
-|------------------|----------------------------------------------------------------------------------------|
-| mini-ls ~/folder | lists all files and directories in the specified folder and prepends each with an icon |
-| mini-ls -F out.txt ~/folder | writes the contents of the specified folder out to the file out.txt |
-| mini-ls -Fout.txt ~/folder | writes the contents of the specified folder out to the file out.txt |
+| command                       | outcome                                                                                      |
+|-------------------------------|----------------------------------------------------------------------------------------------|
+| `./mini-ls ~/folder`            | lists all files and directories in the specified folder and prepends each with an icon       |
+| `./mini-ls -F out.txt ~/folder` | writes the contents of the specified folder out to the file out.txt                          |
+| `./mini-ls -Fout.txt ~/folder`  | writes the contents of the specified folder out to the file out.txt                          |
+| `./mini-ls`                     | lists all the files and directories in the folder from which it is called (works with flags) |
