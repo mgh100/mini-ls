@@ -5,6 +5,7 @@ use mini_ls::arg_processing::Config;
 
 fn main() -> Result<(), Box<dyn Error>> {
   let args: Vec<String> = env::args().collect();
+  println!("{}", args.get(0).expect("can't be missing"));
   let config = Config::new(args);
   let result = manage_output(config);
   match result {

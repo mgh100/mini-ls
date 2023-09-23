@@ -1,4 +1,4 @@
-
+use std::path::Path;
 
 pub struct Config {
   pub target: String,
@@ -8,35 +8,58 @@ pub struct Config {
 
 struct Flag {
   text: String,
-  flag_option_index: usize
+  flag_option_index: Option<usize>,
+  flag_option_text: Option<String>,
 }
 
 impl Config {
   pub fn new(args: Vec<String>) -> Config {
     let flags: Vec<Flag> = parse_flags(&args);
-    let (to_file, target_file) = parse_file_output_args(&flags, &args);
-    let target = args.last().expect("No directory path supplied").to_string();
+    let (to_file, target_file, option_index) = parse_file_output_args(&flags, &args);
+    let target = if args.len() == 1 || option_index.is_some_and(|i| i == args.len() - 1) || (option_index.is_none() && to_file && args.len() == 2) {
+      "./".to_string()
+    } else {
+      args.last().expect("Already checked there are args").to_string()
+    };
     Config { target, to_file, target_file }
   }
 }
 
 fn parse_flags(args: &Vec<String>) -> Vec<Flag> {
-  let flag_mapper = |(i, arg): (usize, &String)| Flag { text: arg.to_string().replace("-", ""), flag_option_index: i + 1 };
+  let flag_mapper = |(i, arg): (usize, &String)| {
+    let flag_option_index = if arg.len() > 2 {None } else {Some(i + 1)};
+    let flag_option_text = if arg.len() > 2 { Some(arg[2..].to_string())} else {None};
+    Flag { text: arg.to_string().replace("-", ""), flag_option_index, flag_option_text }};
   args.iter().enumerate()
     .filter(|(i, arg)| *i != 0 && arg.starts_with("-"))
     .map(flag_mapper)
     .collect()
 }
 
-fn parse_file_output_args(flags: &Vec<Flag>, args: &Vec<String>) -> (bool, String) {
+fn parse_file_output_args(flags: &Vec<Flag>, args: &Vec<String>) -> (bool, String, Option<usize>) {
   let f_arg = flags.iter().find(|flag| flag.text.starts_with("F"));
   match f_arg {
-    Some(flag) => match &flag.text {
-      text if text.len() > 1 => (true, text[1..].to_string()),
-      _text if flag.flag_option_index >= args.len() - 1 => panic!("missing file argument for -F flag"),
-      _text => (true, args.get(flag.flag_option_index).expect("No argument supplied for -F arg").to_string()),
+    Some(flag) => match &flag.flag_option_text {
+      Some(option_text) => (true, option_text.to_string(), flag.flag_option_index),
+      None => find_out_file(flag, args),
     },
-    None => (false, "".to_string()),
+    None => (false, "".to_string(), None),
+  }
+}
+
+fn find_out_file(flag: &Flag, args: &Vec<String>) -> (bool, String, Option<usize>){
+  match flag.flag_option_index {
+    Some(option_index) => {
+      (true, match args.get(option_index) {
+        Some(option_text) => {
+          if Path::new(option_text).is_dir() {
+            panic!("missing file argument for -F flag")
+          }
+          option_text.to_string()},
+        None => panic!("missing file argument for -F flag")
+      }, flag.flag_option_index)
+    },
+    _ => (false, "".to_string(), None)
   }
 }
 
@@ -83,5 +106,12 @@ mod tests {
     assert_eq!(config.target, "/dev");
     assert!(config.to_file);
     assert_eq!(config.target_file, "log.txt");
+  }
+
+  #[test]
+  fn target_dir_is_working_dir_if_unsupplied() {
+    let args = vec![String::from("./mini-ls"), String::from("-Flog.txt")];
+    let config = get_target(args);
+    assert_eq!(config.target, "./");
   }
 }
