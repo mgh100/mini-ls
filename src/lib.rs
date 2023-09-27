@@ -1,9 +1,9 @@
 pub mod arg_processing;
 
+use crate::arg_processing::Config;
 use std::fs;
 use std::fs::{DirEntry, ReadDir};
 use std::path::Path;
-use crate::arg_processing::Config;
 
 const FLOPPY: &str = "\u{1F4BE}";
 const FOLDER: &str = "\u{1F4C1}";
@@ -14,14 +14,16 @@ fn list_contents(directory: &str) -> Result<String, std::io::Error> {
         Ok(file_collection) => Ok(convert_read_dir_to_filename_collection(file_collection)),
         Err(error) => {
             eprintln!("was unable to read the contents of {}", directory);
-            Err(error)}
+            Err(error)
+        }
     }
 }
 
 fn convert_read_dir_to_filename_collection(file_collection: ReadDir) -> String {
-    let (directories, files): (Vec<DirEntry>, Vec<DirEntry>) = file_collection.into_iter()
-      .filter_map(|dir_entry| dir_entry.ok())
-      .partition(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()));
+    let (directories, files): (Vec<DirEntry>, Vec<DirEntry>) = file_collection
+        .into_iter()
+        .filter_map(|dir_entry| dir_entry.ok())
+        .partition(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()));
     let mut string_list_of_files = prepend_each_entry(files, FLOPPY);
     let mut string_list_of_dirs = prepend_each_entry(directories, FOLDER);
     string_list_of_files.append(&mut string_list_of_dirs);
@@ -29,10 +31,11 @@ fn convert_read_dir_to_filename_collection(file_collection: ReadDir) -> String {
 }
 
 fn prepend_each_entry(dir_entries: Vec<DirEntry>, icon: &str) -> Vec<String> {
-    dir_entries.into_iter()
-      .map(convert_dir_entry_to_str)
-      .map(|file_name| icon.to_owned() + " " + &*file_name)
-      .collect()
+    dir_entries
+        .into_iter()
+        .map(convert_dir_entry_to_str)
+        .map(|file_name| icon.to_owned() + " " + &*file_name)
+        .collect()
 }
 
 fn convert_dir_entry_to_str(dir_entry: DirEntry) -> String {
@@ -50,13 +53,12 @@ pub fn manage_output(config: Config) -> std::io::Result<()> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use tempfile::*;
-    use std::fs::File;
     use super::*;
+    use std::fs;
+    use std::fs::File;
+    use tempfile::*;
 
     const FILE_1_NAME: &str = "file_1.txt";
     const FILE_2_NAME: &str = "file_2.txt";
@@ -87,26 +89,42 @@ mod tests {
     fn includes_that_the_entry_is_a_file() {
         let temp_dir = setup_basic_test();
         let list_of_contents = list_contents(temp_dir.path().to_str().unwrap());
-        assert_eq!(list_of_contents.unwrap().lines().filter(|line| line.starts_with(FLOPPY_ICON)).count(), 2);
+        assert_eq!(
+            list_of_contents
+                .unwrap()
+                .lines()
+                .filter(|line| line.starts_with(FLOPPY_ICON))
+                .count(),
+            2
+        );
     }
 
     #[test]
     fn includes_folder_icon_for_sub_folders() {
         let temp_dir = setup_basic_test();
-        let folder_2 = temp_dir.path().join("subfolder");
-        fs::create_dir(folder_2.as_path().to_owned()).unwrap();
+        let folder_2 = temp_dir.path().join("sub_folder");
+        fs::create_dir(folder_2.as_path()).unwrap();
         assert!(folder_2.exists());
         let list_of_contents = list_contents(temp_dir.path().to_str().unwrap());
-        assert_eq!(list_of_contents.unwrap().lines().filter(|line| line.starts_with(FOLDER_ICON)).count(), 1);
+        assert_eq!(
+            list_of_contents
+                .unwrap()
+                .lines()
+                .filter(|line| line.starts_with(FOLDER_ICON))
+                .count(),
+            1
+        );
     }
 
     #[test]
     fn writes_to_file() {
         let temp_dir = setup_basic_test();
         let file_1 = temp_dir.path().join("log.txt");
-        let config = Config{target: temp_dir.path().to_str().unwrap().to_string(),
+        let config = Config {
+            target: temp_dir.path().to_str().unwrap().to_string(),
             to_file: true,
-            target_file: file_1.to_str().unwrap().to_string()};
+            target_file: file_1.to_str().unwrap().to_string(),
+        };
         manage_output(config).unwrap();
         assert!(file_1.exists());
         let file_content = fs::read_to_string(file_1.as_path()).unwrap();
@@ -121,10 +139,9 @@ mod tests {
         let config = Config {
             target: target.as_path().to_str().unwrap().to_string(),
             to_file: false,
-            target_file: "".to_string()
+            target_file: "".to_string(),
         };
         let contents = list_contents(config.target.as_str());
         assert!(contents.is_err());
     }
-
 }
