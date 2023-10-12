@@ -1,109 +1,172 @@
 use std::fmt;
 use std::fmt::Formatter;
-use std::path::Path;
 
-pub struct Config {
-    pub target: String,
-    pub to_file: bool,
-    pub target_file: String,
+const F_FLAG: &str = "F";
+const L_FLAG: &str = "l";
+
+#[derive(PartialEq, Eq)]
+enum AllowedFlags {
+    F,
+    L,
 }
 
-struct Flag {
-    text: String,
-    flag_option_index: Option<usize>,
-    flag_option_text: Option<String>,
+impl AllowedFlags {
+    fn trans_to_char(flag: AllowedFlags) -> char {
+        match flag {
+            AllowedFlags::F => 'F',
+            AllowedFlags::L => 'l',
+            _ => '0',
+        }
+    }
+}
+enum Argument {
+    Flag {
+        switch: AllowedFlags,
+        flag_option_index: Option<usize>,
+        flag_option_text: Option<String>,
+    },
+    TargetDir {
+        target: String,
+    },
+    Option {
+        original_index: usize,
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum ArgParsingError {
     MissingFileOption,
+    UnexpectedArgument { argument: String },
 }
 
 impl fmt::Display for ArgParsingError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "missing file argument for -F flag")
+        match self {
+            ArgParsingError::MissingFileOption => write!(f, "missing file argument for -F flag"),
+            ArgParsingError::UnexpectedArgument { argument } => {
+                write!(f, "unexpected argument provided of {}", argument)
+            }
+        }
     }
+}
+
+pub struct Config {
+    pub target: String,
+    pub to_file: bool,
+    pub target_file: String,
+    pub(crate) extended_attributes: bool,
 }
 
 impl Config {
     pub fn build(args: Vec<String>) -> Result<Config, ArgParsingError> {
-        let flags: Vec<Flag> = parse_flags(&args);
-        let (to_file, target_file, option_index) = parse_file_output_args(&flags, &args)?;
-        let target = if args.len() == 1
-            || option_index.is_some_and(|i| i == args.len() - 1)
-            || (option_index.is_none() && to_file && args.len() == 2)
-        {
-            "./".to_string()
-        } else {
-            args.last()
-                .expect("Already checked there are args")
-                .to_string()
+        let flags: Result<Vec<Argument>, ArgParsingError> = parse_flags(&args);
+        let flags = match flags {
+            Ok(flags) => flags,
+            Err(error) => return Err(error),
+        };
+        let (to_file, target_file) = parse_file_output_args(&flags, &args)?;
+        let extended_attributes = parse_extended_attribute_flag(&flags);
+        let target = flags
+            .iter()
+            .find(|flag| matches!(flag, Argument::TargetDir { .. }));
+        let target = match target {
+            Some(Argument::TargetDir { target }) => target.to_string(),
+            _ => "./".to_string(),
         };
         Ok(Config {
             target,
             to_file,
             target_file,
+            extended_attributes,
         })
     }
 }
 
-fn parse_flags(args: &[String]) -> Vec<Flag> {
-    let flag_mapper = |(i, arg): (usize, &String)| {
-        let flag_option_index = if arg.len() > 2 { None } else { Some(i + 1) };
-        let flag_option_text = if arg.len() > 2 {
-            Some(arg[2..].to_string())
-        } else {
-            None
-        };
-        Flag {
-            text: arg.to_string().replace('-', ""),
-            flag_option_index,
-            flag_option_text,
+fn parse_flags(args: &[String]) -> Result<Vec<Argument>, ArgParsingError> {
+    let allowed_flags = vec![F_FLAG, L_FLAG];
+    // walk through each argument check if flag
+    // if flag break up if longer than 2
+    // check each letter for if a flag
+    // add each flag to the Arguments collection as an enum version
+    // add text option to each struct enum if it exists
+    // validate required text options for switches exist, return error if not of file pointer is dir pointer
+    // check if final argument points to dir or home dir and normalize
+    let filtered_args: Vec<&String> = args.iter().skip(1).collect();
+    let mut visited_args = vec![];
+    // an option must follow the switch it relates to, a switch with an option must be the last arg of a flag block
+    let separated_args = filtered_args.iter().enumerate().flat_map(|(i, arg)| {
+        match arg {
+            string if string.starts_with('-') && string.len() < 3 => {
+                let flag_char = string.strip_prefix('-').expect("string already checked for -");
+                match flag_char {
+                    F_FLAG => {
+                        let flag_option_index = if i <= args.len() - 2 {Some(i + 1)} else {None};
+                        if flag_option_index.is_some() {
+                            visited_args.push(flag_option_index.expect("already checked"));
+                        }
+                        Ok(vec![Argument::Flag {switch: AllowedFlags::F, flag_option_index, flag_option_text: None,}])},
+                    L_FLAG => Ok(vec![Argument::Flag {switch: AllowedFlags::L, flag_option_index: Some(i), flag_option_text: None}]),
+                    argument => Err(ArgParsingError::UnexpectedArgument {argument: argument.to_string()}),
+                }
+            },
+            string if string.starts_with('-') && string.len() >= 3 => {
+                let flag_chars: Vec<&str> = string.strip_prefix('-').expect("string - already checked for").split("").collect();
+                let valid_flag_chars: Vec<&str> = flag_chars.into_iter().filter(|flag_char| allowed_flags.contains(flag_char)).collect();
+                let valid_flag_block_length = &valid_flag_chars.len().clone();
+                let flag_option_text = &arg[*valid_flag_block_length..];
+                Ok(valid_flag_chars.iter().map(|flag_char| match flag_char {
+                    flag if *flag == L_FLAG => Argument::Flag {switch: AllowedFlags::L, flag_option_text: None, flag_option_index: None},
+                    flag if *flag == F_FLAG => Argument::Flag {switch: AllowedFlags::F, flag_option_text: Some(flag_option_text.to_string()), flag_option_index: None},
+                    _ => panic!("There is a missing match arm for all the arguments in the allowed_flags vector"),
+                }).collect())
+            }
+            string if visited_args.contains(&i) => {Ok(vec![Argument::Option {original_index: i, text: string.to_string()}])},
+            target => Ok(vec![Argument::TargetDir {target: (*target).to_string()}]),
         }
-    };
-    args.iter()
-        .enumerate()
-        .filter(|(i, arg)| *i != 0 && arg.starts_with('-'))
-        .map(flag_mapper)
-        .collect()
+    }).flatten().collect();
+    Ok(separated_args)
 }
 
 fn parse_file_output_args(
-    flags: &[Flag],
+    flags: &[Argument],
     args: &[String],
-) -> Result<(bool, String, Option<usize>), ArgParsingError> {
-    let f_arg = flags.iter().find(|flag| flag.text.starts_with('F'));
-    match f_arg {
-        Some(flag) => match &flag.flag_option_text {
-            Some(option_text) => Ok((true, option_text.to_string(), flag.flag_option_index)),
-            None => find_out_file_via_index(flag, args),
-        },
-        None => Ok((false, "".to_string(), None)),
-    }
+) -> Result<(bool, String), ArgParsingError> {
+    let file_switch = flags.iter().find(|arg| match arg {
+        Argument::Flag { switch, .. } => *switch == AllowedFlags::F,
+        _ => false,
+    });
+    let out_to_file = file_switch.is_some();
+    let file_path = if out_to_file {
+        let (flag_option_text, flag_option_index) = match file_switch {
+            Some(Argument::Flag {
+                flag_option_index,
+                flag_option_text,
+                ..
+            }) => (flag_option_text, flag_option_index),
+            _ => return Err(ArgParsingError::MissingFileOption),
+        };
+        match flag_option_text {
+            Some(file_path) => file_path.to_string(),
+            None => match flag_option_index {
+                Some(index) => match args.get(*index) {
+                    Some(file_path) => file_path.to_string(),
+                    None => return Err(ArgParsingError::MissingFileOption),
+                },
+                None => return Err(ArgParsingError::MissingFileOption),
+            },
+        }
+    } else {
+        "".to_string()
+    };
+    Ok((out_to_file, file_path))
 }
 
-fn find_out_file_via_index(
-    flag: &Flag,
-    args: &[String],
-) -> Result<(bool, String, Option<usize>), ArgParsingError> {
-    match flag.flag_option_index {
-        Some(option_index) => Ok((
-            true,
-            match args.get(option_index) {
-                Some(option_text) => {
-                    if Path::new(option_text).is_dir() {
-                        return Err(ArgParsingError::MissingFileOption);
-                    }
-                    option_text.to_string()
-                }
-                None => {
-                    return Err(ArgParsingError::MissingFileOption);
-                }
-            },
-            flag.flag_option_index,
-        )),
-        _ => Ok((false, "".to_string(), None)),
-    }
+fn parse_extended_attribute_flag(flags: &[Argument]) -> bool {
+    flags.iter().any(|flag| match flag {
+        Argument::Flag { switch, .. } => *switch == AllowedFlags::L,
+        _ => false,
+    })
 }
 
 #[cfg(test)]
@@ -148,9 +211,9 @@ mod tests {
             String::from("-F"),
             String::from("/dev"),
         ];
-        let _config = Config::build(args);
-        assert!(_config.is_err());
-        let error = _config.err().unwrap();
+        let config = Config::build(args);
+        assert!(config.is_err());
+        let error = config.err().unwrap();
         assert_eq!(error.to_string(), "missing file argument for -F flag")
     }
 
@@ -190,5 +253,36 @@ mod tests {
         let args = vec![String::from("./mini-ls")];
         let config = Config::build(args).unwrap();
         assert_eq!(config.target, "./");
+    }
+
+    #[test]
+    fn config_includes_extended_arg_if_passed() {
+        let args = vec![String::from("./mini-ls"), String::from("-l")];
+        let config = Config::build(args).unwrap();
+        assert!(config.extended_attributes);
+    }
+
+    #[test]
+    fn config_includes_l_arg_if_concatenated() {
+        let args = vec![
+            String::from("./mini-ls"),
+            String::from("-lF"),
+            String::from("log.txt"),
+        ];
+        let config = Config::build(args).unwrap();
+        assert!(config.extended_attributes);
+    }
+
+    #[test]
+    fn finds_all_flags() {
+        let args = vec![
+            String::from("./mini-ls"),
+            String::from("-lF"),
+            String::from("log.txt"),
+        ];
+        let config = Config::build(args).unwrap();
+        assert!(config.extended_attributes);
+        assert!(config.to_file);
+        assert_eq!(config.target_file, "log.txt");
     }
 }

@@ -124,6 +124,7 @@ mod tests {
             target: temp_dir.path().to_str().unwrap().to_string(),
             to_file: true,
             target_file: file_1.to_str().unwrap().to_string(),
+            extended_attributes: false,
         };
         manage_output(config).unwrap();
         assert!(file_1.exists());
@@ -140,6 +141,7 @@ mod tests {
             target: target.as_path().to_str().unwrap().to_string(),
             to_file: false,
             target_file: "".to_string(),
+            extended_attributes: false,
         };
         let contents = list_contents(config.target.as_str());
         assert!(contents.is_err());
