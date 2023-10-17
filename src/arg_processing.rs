@@ -1,5 +1,7 @@
+use dirs::home_dir;
 use std::fmt;
 use std::fmt::Formatter;
+use std::path::Path;
 
 const F_FLAG: &str = "F";
 const L_FLAG: &str = "l";
@@ -16,6 +18,13 @@ impl AllowedFlags {
             AllowedFlags::F => 'F',
             AllowedFlags::L => 'l',
             _ => '0',
+        }
+    }
+
+    fn requires_option(flag: AllowedFlags) -> bool {
+        match flag {
+            AllowedFlags::F => true,
+            AllowedFlags::L => false,
         }
     }
 }
@@ -84,27 +93,17 @@ impl Config {
 }
 
 fn parse_flags(args: &[String]) -> Result<Vec<Argument>, ArgParsingError> {
-    let allowed_flags = vec![F_FLAG, L_FLAG];
-    // walk through each argument check if flag
-    // if flag break up if longer than 2
-    // check each letter for if a flag
-    // add each flag to the Arguments collection as an enum version
-    // add text option to each struct enum if it exists
-    // validate required text options for switches exist, return error if not of file pointer is dir pointer
-    // check if final argument points to dir or home dir and normalize
+    let allowed_flags = [F_FLAG, L_FLAG];
     let filtered_args: Vec<&String> = args.iter().skip(1).collect();
     let mut visited_args = vec![];
-    // an option must follow the switch it relates to, a switch with an option must be the last arg of a flag block
     let separated_args = filtered_args.iter().enumerate().flat_map(|(i, arg)| {
         match arg {
             string if string.starts_with('-') && string.len() < 3 => {
                 let flag_char = string.strip_prefix('-').expect("string already checked for -");
                 match flag_char {
                     F_FLAG => {
-                        let flag_option_index = if i <= args.len() - 2 {Some(i + 1)} else {None};
-                        if flag_option_index.is_some() {
-                            visited_args.push(flag_option_index.expect("already checked"));
-                        }
+                        let flag_option_index = if i <= filtered_args.len() - 2 {Some(i + 1)} else {None};
+                        if let Some(index) = flag_option_index { visited_args.push(index) };
                         Ok(vec![Argument::Flag {switch: AllowedFlags::F, flag_option_index, flag_option_text: None,}])},
                     L_FLAG => Ok(vec![Argument::Flag {switch: AllowedFlags::L, flag_option_index: Some(i), flag_option_text: None}]),
                     argument => Err(ArgParsingError::UnexpectedArgument {argument: argument.to_string()}),
@@ -113,15 +112,23 @@ fn parse_flags(args: &[String]) -> Result<Vec<Argument>, ArgParsingError> {
             string if string.starts_with('-') && string.len() >= 3 => {
                 let flag_chars: Vec<&str> = string.strip_prefix('-').expect("string - already checked for").split("").collect();
                 let valid_flag_chars: Vec<&str> = flag_chars.into_iter().filter(|flag_char| allowed_flags.contains(flag_char)).collect();
-                let valid_flag_block_length = &valid_flag_chars.len().clone();
-                let flag_option_text = &arg[*valid_flag_block_length..];
+                let valid_flag_block_length = valid_flag_chars.len();
+                let flag_option_text = if valid_flag_block_length == arg.len() - 1 {None} else {Some(arg[valid_flag_block_length..].to_string())};
+                let flag_option_index = match flag_option_text {
+                    None if (i + 1) < args.len() => {
+                        visited_args.push(i + 1);
+                        Some(i + 1)
+                    },
+                    Some(_) => None,
+                    None => None,
+                };
                 Ok(valid_flag_chars.iter().map(|flag_char| match flag_char {
                     flag if *flag == L_FLAG => Argument::Flag {switch: AllowedFlags::L, flag_option_text: None, flag_option_index: None},
-                    flag if *flag == F_FLAG => Argument::Flag {switch: AllowedFlags::F, flag_option_text: Some(flag_option_text.to_string()), flag_option_index: None},
+                    flag if *flag == F_FLAG => Argument::Flag {switch: AllowedFlags::F, flag_option_text: flag_option_text.clone(), flag_option_index},
                     _ => panic!("There is a missing match arm for all the arguments in the allowed_flags vector"),
                 }).collect())
             }
-            string if visited_args.contains(&i) => {Ok(vec![Argument::Option {original_index: i, text: string.to_string()}])},
+            string if visited_args.contains(&i) => Ok(vec![Argument::Option {original_index: i, text: string.to_string()}]),
             target => Ok(vec![Argument::TargetDir {target: (*target).to_string()}]),
         }
     }).flatten().collect();
@@ -132,34 +139,59 @@ fn parse_file_output_args(
     flags: &[Argument],
     args: &[String],
 ) -> Result<(bool, String), ArgParsingError> {
-    let file_switch = flags.iter().find(|arg| match arg {
-        Argument::Flag { switch, .. } => *switch == AllowedFlags::F,
-        _ => false,
-    });
-    let out_to_file = file_switch.is_some();
-    let file_path = if out_to_file {
-        let (flag_option_text, flag_option_index) = match file_switch {
-            Some(Argument::Flag {
-                flag_option_index,
-                flag_option_text,
-                ..
-            }) => (flag_option_text, flag_option_index),
-            _ => return Err(ArgParsingError::MissingFileOption),
-        };
-        match flag_option_text {
-            Some(file_path) => file_path.to_string(),
-            None => match flag_option_index {
-                Some(index) => match args.get(*index) {
-                    Some(file_path) => file_path.to_string(),
-                    None => return Err(ArgParsingError::MissingFileOption),
+    // typical input [Flag, Flag, Option, TargetDir]
+    for (i, arg) in flags.iter().enumerate() {
+        if let Argument::Flag {
+            switch: AllowedFlags::F,
+            flag_option_text,
+            flag_option_index,
+        } = arg
+        {
+            let file_output = true;
+            let file_path = match flag_option_text {
+                Some(text) => text,
+                None => match flags.get(i + 1) {
+                    Some(Argument::Option {
+                        text,
+                        original_index,
+                    }) => text,
+                    _ => {
+                        return Err(ArgParsingError::MissingFileOption);
+                    }
                 },
-                None => return Err(ArgParsingError::MissingFileOption),
-            },
+            };
+            let file_path = if file_path.starts_with('~') {
+                let home_dir = dirs::home_dir();
+                let home_dir = match home_dir {
+                    None => {
+                        return Err(ArgParsingError::UnexpectedArgument {
+                            argument: file_path.to_string(),
+                        });
+                    }
+                    Some(home) => home,
+                };
+                let home_dir = home_dir.to_str();
+                let home_dir = match home_dir {
+                    None => {
+                        return Err(ArgParsingError::UnexpectedArgument {
+                            argument: file_path.to_string(),
+                        });
+                    }
+                    Some(home) => home,
+                };
+                file_path.replace('~', home_dir)
+            } else {
+                file_path.to_string()
+            };
+            let file_path_as_path = Path::new(&file_path);
+            return if file_path_as_path.is_dir() {
+                Err(ArgParsingError::MissingFileOption)
+            } else {
+                Ok((file_output, file_path.to_string()))
+            };
         }
-    } else {
-        "".to_string()
-    };
-    Ok((out_to_file, file_path))
+    }
+    Ok((false, "".to_string()))
 }
 
 fn parse_extended_attribute_flag(flags: &[Argument]) -> bool {
@@ -209,7 +241,7 @@ mod tests {
         let args = vec![
             String::from("./mini-ls"),
             String::from("-F"),
-            String::from("/dev"),
+            String::from("~/dev"),
         ];
         let config = Config::build(args);
         assert!(config.is_err());
