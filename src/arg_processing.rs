@@ -1,4 +1,4 @@
-use dirs::home_dir;
+use dirs;
 use std::fmt;
 use std::fmt::Formatter;
 use std::path::Path;
@@ -12,33 +12,15 @@ enum AllowedFlags {
     L,
 }
 
-impl AllowedFlags {
-    fn trans_to_char(flag: AllowedFlags) -> char {
-        match flag {
-            AllowedFlags::F => 'F',
-            AllowedFlags::L => 'l',
-            _ => '0',
-        }
-    }
-
-    fn requires_option(flag: AllowedFlags) -> bool {
-        match flag {
-            AllowedFlags::F => true,
-            AllowedFlags::L => false,
-        }
-    }
-}
 enum Argument {
     Flag {
         switch: AllowedFlags,
-        flag_option_index: Option<usize>,
         flag_option_text: Option<String>,
     },
     TargetDir {
         target: String,
     },
     Option {
-        original_index: usize,
         text: String,
     },
 }
@@ -74,7 +56,7 @@ impl Config {
             Ok(flags) => flags,
             Err(error) => return Err(error),
         };
-        let (to_file, target_file) = parse_file_output_args(&flags, &args)?;
+        let (to_file, target_file) = parse_file_output_args(&flags)?;
         let extended_attributes = parse_extended_attribute_flag(&flags);
         let target = flags
             .iter()
@@ -95,7 +77,7 @@ impl Config {
 fn parse_flags(args: &[String]) -> Result<Vec<Argument>, ArgParsingError> {
     let allowed_flags = [F_FLAG, L_FLAG];
     let filtered_args: Vec<&String> = args.iter().skip(1).collect();
-    let mut visited_args = vec![];
+    let mut discovered_options = vec![];
     let separated_args = filtered_args.iter().enumerate().flat_map(|(i, arg)| {
         match arg {
             string if string.starts_with('-') && string.len() < 3 => {
@@ -103,9 +85,9 @@ fn parse_flags(args: &[String]) -> Result<Vec<Argument>, ArgParsingError> {
                 match flag_char {
                     F_FLAG => {
                         let flag_option_index = if i <= filtered_args.len() - 2 {Some(i + 1)} else {None};
-                        if let Some(index) = flag_option_index { visited_args.push(index) };
-                        Ok(vec![Argument::Flag {switch: AllowedFlags::F, flag_option_index, flag_option_text: None,}])},
-                    L_FLAG => Ok(vec![Argument::Flag {switch: AllowedFlags::L, flag_option_index: Some(i), flag_option_text: None}]),
+                        if let Some(index) = flag_option_index { discovered_options.push(index) };
+                        Ok(vec![Argument::Flag {switch: AllowedFlags::F, flag_option_text: None,}])},
+                    L_FLAG => Ok(vec![Argument::Flag {switch: AllowedFlags::L, flag_option_text: None}]),
                     argument => Err(ArgParsingError::UnexpectedArgument {argument: argument.to_string()}),
                 }
             },
@@ -114,47 +96,40 @@ fn parse_flags(args: &[String]) -> Result<Vec<Argument>, ArgParsingError> {
                 let valid_flag_chars: Vec<&str> = flag_chars.into_iter().filter(|flag_char| allowed_flags.contains(flag_char)).collect();
                 let valid_flag_block_length = valid_flag_chars.len();
                 let flag_option_text = if valid_flag_block_length == arg.len() - 1 {None} else {Some(arg[valid_flag_block_length..].to_string())};
-                let flag_option_index = match flag_option_text {
+                match flag_option_text {
                     None if (i + 1) < args.len() => {
-                        visited_args.push(i + 1);
+                        discovered_options.push(i + 1);
                         Some(i + 1)
                     },
                     Some(_) => None,
                     None => None,
                 };
                 Ok(valid_flag_chars.iter().map(|flag_char| match flag_char {
-                    flag if *flag == L_FLAG => Argument::Flag {switch: AllowedFlags::L, flag_option_text: None, flag_option_index: None},
-                    flag if *flag == F_FLAG => Argument::Flag {switch: AllowedFlags::F, flag_option_text: flag_option_text.clone(), flag_option_index},
+                    flag if *flag == L_FLAG => Argument::Flag {switch: AllowedFlags::L, flag_option_text: None},
+                    flag if *flag == F_FLAG => Argument::Flag {switch: AllowedFlags::F, flag_option_text: flag_option_text.clone()},
                     _ => panic!("There is a missing match arm for all the arguments in the allowed_flags vector"),
                 }).collect())
             }
-            string if visited_args.contains(&i) => Ok(vec![Argument::Option {original_index: i, text: string.to_string()}]),
+            string if discovered_options.contains(&i) => Ok(vec![Argument::Option { text: string.to_string()}]),
             target => Ok(vec![Argument::TargetDir {target: (*target).to_string()}]),
         }
     }).flatten().collect();
     Ok(separated_args)
 }
 
-fn parse_file_output_args(
-    flags: &[Argument],
-    args: &[String],
-) -> Result<(bool, String), ArgParsingError> {
+fn parse_file_output_args(flags: &[Argument]) -> Result<(bool, String), ArgParsingError> {
     // typical input [Flag, Flag, Option, TargetDir]
     for (i, arg) in flags.iter().enumerate() {
         if let Argument::Flag {
             switch: AllowedFlags::F,
             flag_option_text,
-            flag_option_index,
         } = arg
         {
             let file_output = true;
             let file_path = match flag_option_text {
                 Some(text) => text,
                 None => match flags.get(i + 1) {
-                    Some(Argument::Option {
-                        text,
-                        original_index,
-                    }) => text,
+                    Some(Argument::Option { text }) => text,
                     _ => {
                         return Err(ArgParsingError::MissingFileOption);
                     }
