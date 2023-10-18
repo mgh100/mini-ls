@@ -81,52 +81,42 @@ impl Config {
 }
 
 fn parse_flags(args: &[String]) -> Result<Vec<Argument>, ArgParsingError> {
-    let allowed_flags = [F_FLAG, L_FLAG];
     let filtered_args: Vec<&String> = args.iter().skip(1).collect();
     let mut discovered_options = vec![];
-    let separated_args = filtered_args.iter().enumerate().flat_map(|(i, arg)| {
-        match arg {
+    let separated_args = filtered_args
+        .iter()
+        .enumerate()
+        .flat_map(|(i, arg)| match arg {
             string if string.starts_with('-') && string.len() < 3 => {
-                let switch = extract_single_no_concat_switch(string)?;
-                let requires_option = requires_option(&switch);
-                if requires_option && i <= filtered_args.len() - 2 {
-                    discovered_options.push(i + 1);
-                }
-                Ok::<Vec<Argument>, ArgParsingError>(vec![switch])
-
-                // match flag_char {
-                //     F_FLAG => {
-                //         let flag_option_index = if i <= filtered_args.len() - 2 {Some(i + 1)} else {None};
-                //         if let Some(index) = flag_option_index { discovered_options.push(index) };
-                //         Ok(vec![Argument::Flag {switch: AllowedFlags::F, flag_option_text: None,}])},
-                //     L_FLAG => Ok(vec![Argument::Flag {switch: AllowedFlags::L, flag_option_text: None}]),
-                //     argument => Err(ArgParsingError::UnexpectedArgument {argument: argument.to_string()}),
-                // }
-            },
-            string if string.starts_with('-') && string.len() >= 3 => {
-                let flag_chars: Vec<&str> = string.strip_prefix('-').expect("string - already checked for").split("").collect();
-                let valid_flag_chars: Vec<&str> = flag_chars.into_iter().filter(|flag_char| allowed_flags.contains(flag_char)).collect();
-                let valid_flag_block_length = valid_flag_chars.len();
-                let flag_option_text = if valid_flag_block_length == arg.len() - 1 {None} else {Some(arg[valid_flag_block_length..].to_string())};
-                match flag_option_text {
-                    None if (i + 1) < args.len() => {
-                        discovered_options.push(i + 1);
-                        Some(i + 1)
-                    },
-                    Some(_) => None,
-                    None => None,
-                };
-                Ok(valid_flag_chars.iter().map(|flag_char| match flag_char {
-                    flag if *flag == L_FLAG => Argument::Flag {switch: AllowedFlags::L, flag_option_text: None},
-                    flag if *flag == F_FLAG => Argument::Flag {switch: AllowedFlags::F, flag_option_text: flag_option_text.clone()},
-                    _ => panic!("There is a missing match arm for all the arguments in the allowed_flags vector"),
-                }).collect())
+                process_single_flag(string, filtered_args.len(), i, &mut discovered_options)
             }
-            string if discovered_options.contains(&i) => Ok(vec![Argument::Option { text: string.to_string()}]),
-            target => Ok(vec![Argument::TargetDir {target: (*target).to_string()}]),
-        }
-    }).flatten().collect();
+            string if string.starts_with('-') && string.len() >= 3 => {
+                extract_flags_from_block(string, &mut discovered_options, i, args.len())
+            }
+            string if discovered_options.contains(&i) => Ok(vec![Argument::Option {
+                text: string.to_string(),
+            }]),
+            target => Ok(vec![Argument::TargetDir {
+                target: (*target).to_string(),
+            }]),
+        })
+        .flatten()
+        .collect();
     Ok(separated_args)
+}
+
+fn process_single_flag(
+    string: &str,
+    arg_length: usize,
+    index: usize,
+    discovered_options: &mut Vec<usize>,
+) -> Result<Vec<Argument>, ArgParsingError> {
+    let switch = extract_single_no_concat_switch(string)?;
+    let requires_option = requires_option(&switch);
+    if requires_option && index <= arg_length - 2 {
+        discovered_options.push(index + 1);
+    }
+    Ok::<Vec<Argument>, ArgParsingError>(vec![switch])
 }
 
 fn extract_single_no_concat_switch(string: &str) -> Result<Argument, ArgParsingError> {
@@ -153,6 +143,54 @@ fn requires_option(switch: &Argument) -> bool {
         Argument::Flag { switch, .. } => AllowedFlags::requires_option(switch),
         _ => false,
     }
+}
+
+fn extract_flags_from_block(
+    string: &str,
+    discovered_options: &mut Vec<usize>,
+    i: usize,
+    args_length: usize,
+) -> Result<Vec<Argument>, ArgParsingError> {
+    let allowed_flags = [F_FLAG, L_FLAG];
+    let flag_chars: Vec<&str> = string
+        .strip_prefix('-')
+        .expect("string - already checked for")
+        .split("")
+        .collect();
+    let valid_flag_chars: Vec<&str> = flag_chars
+        .into_iter()
+        .filter(|flag_char| allowed_flags.contains(flag_char))
+        .collect();
+    let valid_flag_block_length = valid_flag_chars.len();
+    let flag_option_text = if valid_flag_block_length == string.len() - 1 {
+        None
+    } else {
+        Some(string[valid_flag_block_length..].to_string())
+    };
+    match flag_option_text {
+        None if (i + 1) < args_length => {
+            discovered_options.push(i + 1);
+            Some(i + 1)
+        }
+        Some(_) => None,
+        None => None,
+    };
+    Ok(valid_flag_chars
+        .iter()
+        .map(|flag_char| match flag_char {
+            flag if *flag == L_FLAG => Argument::Flag {
+                switch: AllowedFlags::L,
+                flag_option_text: None,
+            },
+            flag if *flag == F_FLAG => Argument::Flag {
+                switch: AllowedFlags::F,
+                flag_option_text: flag_option_text.clone(),
+            },
+            _ => panic!(
+                "There is a missing match arm for all the arguments in the allowed_flags vector"
+            ),
+        })
+        .collect())
 }
 
 fn parse_file_output_args(flags: &[Argument]) -> Result<(bool, String), ArgParsingError> {
