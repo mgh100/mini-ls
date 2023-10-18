@@ -145,6 +145,36 @@ fn extract_flags_from_block(
     i: usize,
     args_length: usize,
 ) -> Result<Vec<Argument>, ArgParsingError> {
+    let (valid_flag_chars, flag_option_text) = split_flag_block(string);
+    Ok(valid_flag_chars
+        .iter()
+        .map(|flag_char| match flag_char {
+            flag if *flag == L_FLAG => Argument::Flag {
+                switch: AllowedFlags::L,
+                flag_option_text: None,
+            },
+            flag if *flag == F_FLAG => {
+                match flag_option_text {
+                    None if (i + 1) < args_length => {
+                        discovered_options.push(i + 1);
+                        Some(i + 1)
+                    }
+                    Some(_) => None,
+                    None => None,
+                };
+                Argument::Flag {
+                    switch: AllowedFlags::F,
+                    flag_option_text: flag_option_text.clone(),
+                }
+            }
+            _ => panic!(
+                "There is a missing match arm for all the arguments in the allowed_flags vector"
+            ),
+        })
+        .collect())
+}
+
+fn split_flag_block(string: &str) -> (Vec<&str>, Option<String>) {
     let allowed_flags = [F_FLAG, L_FLAG];
     let flag_chars: Vec<&str> = string
         .strip_prefix('-')
@@ -161,30 +191,7 @@ fn extract_flags_from_block(
     } else {
         Some(string[valid_flag_block_length..].to_string())
     };
-    match flag_option_text {
-        None if (i + 1) < args_length => {
-            discovered_options.push(i + 1);
-            Some(i + 1)
-        }
-        Some(_) => None,
-        None => None,
-    };
-    Ok(valid_flag_chars
-        .iter()
-        .map(|flag_char| match flag_char {
-            flag if *flag == L_FLAG => Argument::Flag {
-                switch: AllowedFlags::L,
-                flag_option_text: None,
-            },
-            flag if *flag == F_FLAG => Argument::Flag {
-                switch: AllowedFlags::F,
-                flag_option_text: flag_option_text.clone(),
-            },
-            _ => panic!(
-                "There is a missing match arm for all the arguments in the allowed_flags vector"
-            ),
-        })
-        .collect())
+    (valid_flag_chars, flag_option_text)
 }
 
 fn parse_file_output_args(flags: &[Argument]) -> Result<(bool, String), ArgParsingError> {
@@ -196,38 +203,7 @@ fn parse_file_output_args(flags: &[Argument]) -> Result<(bool, String), ArgParsi
         } = arg
         {
             let file_output = true;
-            let file_path = match flag_option_text {
-                Some(text) => text,
-                None => match flags.get(i + 1) {
-                    Some(Argument::Option { text }) => text,
-                    _ => {
-                        return Err(ArgParsingError::MissingFileOption);
-                    }
-                },
-            };
-            let file_path = if file_path.starts_with('~') {
-                let home_dir = dirs::home_dir();
-                let home_dir = match home_dir {
-                    None => {
-                        return Err(ArgParsingError::UnexpectedArgument {
-                            argument: file_path.to_string(),
-                        });
-                    }
-                    Some(home) => home,
-                };
-                let home_dir = home_dir.to_str();
-                let home_dir = match home_dir {
-                    None => {
-                        return Err(ArgParsingError::UnexpectedArgument {
-                            argument: file_path.to_string(),
-                        });
-                    }
-                    Some(home) => home,
-                };
-                file_path.replace('~', home_dir)
-            } else {
-                file_path.to_string()
-            };
+            let file_path = get_valid_file_path(flag_option_text, i, flags)?;
             let file_path_as_path = Path::new(&file_path);
             return if file_path_as_path.is_dir() {
                 Err(ArgParsingError::MissingFileOption)
@@ -237,6 +213,55 @@ fn parse_file_output_args(flags: &[Argument]) -> Result<(bool, String), ArgParsi
         }
     }
     Ok((false, "".to_string()))
+}
+
+fn get_valid_file_path(
+    flag_option_text: &Option<String>,
+    i: usize,
+    flags: &[Argument],
+) -> Result<String, ArgParsingError> {
+    let file_path = get_file_path_as_str(flag_option_text, i, flags)?;
+    convert_from_short_unix_home(&file_path)
+}
+
+fn get_file_path_as_str(
+    flag_option_text: &Option<String>,
+    i: usize,
+    flags: &[Argument],
+) -> Result<String, ArgParsingError> {
+    match flag_option_text {
+        Some(text) => Ok(text.to_string()),
+        None => match flags.get(i + 1) {
+            Some(Argument::Option { text }) => Ok(text.to_string()),
+            _ => Err(ArgParsingError::MissingFileOption),
+        },
+    }
+}
+
+fn convert_from_short_unix_home(file_path: &str) -> Result<String, ArgParsingError> {
+    if file_path.starts_with('~') {
+        let home_dir = dirs::home_dir();
+        let home_dir = match home_dir {
+            None => {
+                return Err(ArgParsingError::UnexpectedArgument {
+                    argument: file_path.to_string(),
+                });
+            }
+            Some(home) => home,
+        };
+        let home_dir = home_dir.to_str();
+        let home_dir = match home_dir {
+            None => {
+                return Err(ArgParsingError::UnexpectedArgument {
+                    argument: file_path.to_string(),
+                });
+            }
+            Some(home) => home,
+        };
+        Ok(file_path.replace('~', home_dir))
+    } else {
+        Ok(file_path.to_string())
+    }
 }
 
 fn parse_extended_attribute_flag(flags: &[Argument]) -> bool {
@@ -362,4 +387,6 @@ mod tests {
         assert!(config.to_file);
         assert_eq!(config.target_file, "log.txt");
     }
+
+    //duplicate options generated where multiple flags with options in block (NYI)
 }
