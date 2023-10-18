@@ -12,6 +12,12 @@ enum AllowedFlags {
     L,
 }
 
+impl AllowedFlags {
+    fn requires_option(switch: &AllowedFlags) -> bool {
+        matches!(switch, AllowedFlags::F)
+    }
+}
+
 enum Argument {
     Flag {
         switch: AllowedFlags,
@@ -81,15 +87,21 @@ fn parse_flags(args: &[String]) -> Result<Vec<Argument>, ArgParsingError> {
     let separated_args = filtered_args.iter().enumerate().flat_map(|(i, arg)| {
         match arg {
             string if string.starts_with('-') && string.len() < 3 => {
-                let flag_char = string.strip_prefix('-').expect("string already checked for -");
-                match flag_char {
-                    F_FLAG => {
-                        let flag_option_index = if i <= filtered_args.len() - 2 {Some(i + 1)} else {None};
-                        if let Some(index) = flag_option_index { discovered_options.push(index) };
-                        Ok(vec![Argument::Flag {switch: AllowedFlags::F, flag_option_text: None,}])},
-                    L_FLAG => Ok(vec![Argument::Flag {switch: AllowedFlags::L, flag_option_text: None}]),
-                    argument => Err(ArgParsingError::UnexpectedArgument {argument: argument.to_string()}),
+                let switch = extract_single_no_concat_switch(string)?;
+                let requires_option = requires_option(&switch);
+                if requires_option && i <= filtered_args.len() - 2 {
+                    discovered_options.push(i + 1);
                 }
+                Ok::<Vec<Argument>, ArgParsingError>(vec![switch])
+
+                // match flag_char {
+                //     F_FLAG => {
+                //         let flag_option_index = if i <= filtered_args.len() - 2 {Some(i + 1)} else {None};
+                //         if let Some(index) = flag_option_index { discovered_options.push(index) };
+                //         Ok(vec![Argument::Flag {switch: AllowedFlags::F, flag_option_text: None,}])},
+                //     L_FLAG => Ok(vec![Argument::Flag {switch: AllowedFlags::L, flag_option_text: None}]),
+                //     argument => Err(ArgParsingError::UnexpectedArgument {argument: argument.to_string()}),
+                // }
             },
             string if string.starts_with('-') && string.len() >= 3 => {
                 let flag_chars: Vec<&str> = string.strip_prefix('-').expect("string - already checked for").split("").collect();
@@ -115,6 +127,32 @@ fn parse_flags(args: &[String]) -> Result<Vec<Argument>, ArgParsingError> {
         }
     }).flatten().collect();
     Ok(separated_args)
+}
+
+fn extract_single_no_concat_switch(string: &str) -> Result<Argument, ArgParsingError> {
+    let flag_char = string
+        .strip_prefix('-')
+        .expect("string input missing required start char");
+    match flag_char {
+        F_FLAG => Ok(Argument::Flag {
+            switch: AllowedFlags::F,
+            flag_option_text: None,
+        }),
+        L_FLAG => Ok(Argument::Flag {
+            switch: AllowedFlags::L,
+            flag_option_text: None,
+        }),
+        argument => Err(ArgParsingError::UnexpectedArgument {
+            argument: argument.to_string(),
+        }),
+    }
+}
+
+fn requires_option(switch: &Argument) -> bool {
+    match switch {
+        Argument::Flag { switch, .. } => AllowedFlags::requires_option(switch),
+        _ => false,
+    }
 }
 
 fn parse_file_output_args(flags: &[Argument]) -> Result<(bool, String), ArgParsingError> {
