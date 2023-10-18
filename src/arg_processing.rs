@@ -111,12 +111,13 @@ fn process_single_flag(
     index: usize,
     discovered_options: &mut Vec<usize>,
 ) -> Result<Vec<Argument>, ArgParsingError> {
-    let switch = extract_single_no_concat_switch(string)?;
-    let requires_option = requires_option(&switch);
-    if requires_option && index <= arg_length - 2 {
-        discovered_options.push(index + 1);
+    let argument = extract_single_no_concat_switch(string)?;
+    if let Argument::Flag { switch, .. } = &argument {
+        if AllowedFlags::requires_option(switch) && index <= arg_length - 2 {
+            discovered_options.push(index + 1);
+        }
     }
-    Ok::<Vec<Argument>, ArgParsingError>(vec![switch])
+    Ok::<Vec<Argument>, ArgParsingError>(vec![argument])
 }
 
 fn extract_single_no_concat_switch(string: &str) -> Result<Argument, ArgParsingError> {
@@ -135,13 +136,6 @@ fn extract_single_no_concat_switch(string: &str) -> Result<Argument, ArgParsingE
         argument => Err(ArgParsingError::UnexpectedArgument {
             argument: argument.to_string(),
         }),
-    }
-}
-
-fn requires_option(switch: &Argument) -> bool {
-    match switch {
-        Argument::Flag { switch, .. } => AllowedFlags::requires_option(switch),
-        _ => false,
     }
 }
 
