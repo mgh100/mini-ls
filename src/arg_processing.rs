@@ -376,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn finds_all_flags() {
+    fn finds_all_flags_and_options() {
         let args = vec![
             String::from("./mini-ls"),
             String::from("-lF"),
@@ -386,6 +386,36 @@ mod tests {
         assert!(config.extended_attributes);
         assert!(config.to_file);
         assert_eq!(config.target_file, "log.txt");
+    }
+
+    #[test]
+    fn finds_all_flags_options_when_separated() {
+        let args = vec![
+            String::from("./mini-ls"),
+            String::from("-l"),
+            String::from("-F"),
+            String::from("log.txt"),
+            String::from("/opt/dev"),
+        ];
+        let config = Config::build(args).unwrap();
+        assert!(config.extended_attributes);
+        assert!(config.to_file);
+        assert_eq!(config.target_file, "log.txt");
+        assert_eq!(config.target, "/opt/dev");
+    }
+
+    #[test]
+    fn still_extracts_all_flags_in_concat_block() {
+        let args = vec![
+            String::from("./mini-ls"),
+            String::from("-lFlog.txt"),
+            String::from("/opt/dev"),
+        ];
+        let config = Config::build(args).unwrap();
+        assert!(config.to_file);
+        assert!(config.extended_attributes);
+        assert_eq!(config.target_file, "log.txt");
+        assert_eq!(config.target, "/opt/dev");
     }
 
     //duplicate options generated where multiple flags with options in block (NYI)
