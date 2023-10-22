@@ -8,29 +8,38 @@ use std::path::Path;
 const FLOPPY: &str = "\u{1F4BE}";
 const FOLDER: &str = "\u{1F4C1}";
 
-fn list_contents(directory: &str) -> Result<String, std::io::Error> {
-    let dir_read = fs::read_dir(directory);
+fn list_contents(config: &Config) -> Result<String, std::io::Error> {
+    let dir_read = fs::read_dir(&config.target);
     match dir_read {
-        Ok(file_collection) => Ok(convert_read_dir_to_filename_collection(file_collection)),
+        Ok(file_collection) => Ok(convert_read_dir_to_filename_collection(
+            file_collection,
+            config.extended_attributes,
+        )),
         Err(error) => {
-            eprintln!("was unable to read the contents of {}", directory);
+            eprintln!("was unable to read the contents of {}", &config.target);
             Err(error)
         }
     }
 }
 
-fn convert_read_dir_to_filename_collection(file_collection: ReadDir) -> String {
+fn convert_read_dir_to_filename_collection(
+    file_collection: ReadDir,
+    extended_attr: bool,
+) -> String {
     let (directories, files): (Vec<DirEntry>, Vec<DirEntry>) = file_collection
         .into_iter()
         .filter_map(|dir_entry| dir_entry.ok())
         .partition(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()));
-    let mut string_list_of_files = prepend_each_entry(files, FLOPPY);
-    let mut string_list_of_dirs = prepend_each_entry(directories, FOLDER);
+    // if extended_attr {
+    //     let file_entry = files.get(0).unwrap().metadata().unwrap();
+    // }
+    let mut string_list_of_files = format_each_entry(files, FLOPPY);
+    let mut string_list_of_dirs = format_each_entry(directories, FOLDER);
     string_list_of_files.append(&mut string_list_of_dirs);
     string_list_of_files.join("\n")
 }
 
-fn prepend_each_entry(dir_entries: Vec<DirEntry>, icon: &str) -> Vec<String> {
+fn format_each_entry(dir_entries: Vec<DirEntry>, icon: &str) -> Vec<String> {
     dir_entries
         .into_iter()
         .map(convert_dir_entry_to_str)
@@ -45,7 +54,7 @@ fn convert_dir_entry_to_str(dir_entry: DirEntry) -> String {
 }
 
 pub fn manage_output(config: Config) -> std::io::Result<()> {
-    let contents = list_contents(config.target.as_str())?;
+    let contents = list_contents(&config)?;
     if config.to_file {
         return fs::write(Path::new(config.target_file.as_str()), contents);
     }
@@ -76,10 +85,23 @@ mod tests {
         temp_dir
     }
 
+    fn get_typical_config(dir: Option<TempDir>) -> (Config, TempDir) {
+        let temp_dir = if let Some(dir_arg) = dir {
+            dir_arg
+        } else {
+            setup_basic_test()
+        };
+        let args = vec![
+            String::from("./mini-ls"),
+            String::from(temp_dir.path().to_str().unwrap()),
+        ];
+        (Config::build(args).unwrap(), temp_dir)
+    }
+
     #[test]
     fn includes_files_inside_folder_in_output() {
-        let temp_dir = setup_basic_test();
-        let list_of_contents = list_contents(temp_dir.path().to_str().unwrap());
+        let (config, _temp_dir) = get_typical_config(None);
+        let list_of_contents = list_contents(&config);
         let list_of_contents = list_of_contents.unwrap();
         assert!(list_of_contents.contains(FILE_1_NAME));
         assert!(list_of_contents.contains(FILE_1_NAME));
@@ -87,8 +109,8 @@ mod tests {
 
     #[test]
     fn includes_that_the_entry_is_a_file() {
-        let temp_dir = setup_basic_test();
-        let list_of_contents = list_contents(temp_dir.path().to_str().unwrap());
+        let (config, _temp_dir) = get_typical_config(None);
+        let list_of_contents = list_contents(&config);
         assert_eq!(
             list_of_contents
                 .unwrap()
@@ -105,7 +127,8 @@ mod tests {
         let folder_2 = temp_dir.path().join("sub_folder");
         fs::create_dir(folder_2.as_path()).unwrap();
         assert!(folder_2.exists());
-        let list_of_contents = list_contents(temp_dir.path().to_str().unwrap());
+        let (config, _temp_dir) = get_typical_config(Some(temp_dir));
+        let list_of_contents = list_contents(&config);
         assert_eq!(
             list_of_contents
                 .unwrap()
@@ -143,7 +166,7 @@ mod tests {
             target_file: "".to_string(),
             extended_attributes: false,
         };
-        let contents = list_contents(config.target.as_str());
+        let contents = list_contents(&config);
         assert!(contents.is_err());
     }
 }
