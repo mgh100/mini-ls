@@ -1,25 +1,64 @@
 pub mod arg_processing;
 
 use crate::arg_processing::Config;
-use std::fs;
+use chrono::{DateTime, Utc};
+use std::fmt::Formatter;
 use std::fs::{DirEntry, ReadDir};
 use std::ops::Add;
 use std::path::Path;
+use std::time::UNIX_EPOCH;
+use std::{fmt, fs, io};
 
 const FLOPPY: &str = "\u{1F4BE}";
 const FOLDER: &str = "\u{1F4C1}";
 
-fn list_contents(config: &Config, width: usize) -> Result<String, std::io::Error> {
+#[derive(Debug, Clone)]
+pub enum FileEntryParsingError {
+    UnableToReadDir {
+        target: String,
+        original_error: io::ErrorKind,
+    },
+}
+
+impl fmt::Display for FileEntryParsingError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            FileEntryParsingError::UnableToReadDir {
+                target,
+                original_error,
+            } => write!(
+                f,
+                "was unable to read the contents of {} due to {:?}",
+                target, original_error
+            ),
+        }
+    }
+}
+
+impl From<FileEntryParsingError> for std::io::Error {
+    fn from(value: FileEntryParsingError) -> Self {
+        match value {
+            FileEntryParsingError::UnableToReadDir { original_error, .. } => {
+                std::io::Error::from(original_error)
+            }
+        }
+    }
+}
+
+fn list_contents(config: &Config, width: usize) -> Result<String, FileEntryParsingError> {
     let dir_read = fs::read_dir(&config.target);
     match dir_read {
         Ok(file_collection) => Ok(convert_read_dir_to_filename_collection(
             file_collection,
             config.extended_attributes,
             width,
-        )),
-        Err(error) => {
-            eprintln!("was unable to read the contents of {}", &config.target);
-            Err(error)
+        )?),
+        Err(original_error) => {
+            let error_kind = original_error.kind();
+            Err(FileEntryParsingError::UnableToReadDir {
+                target: config.target.to_string(),
+                original_error: error_kind,
+            })
         }
     }
 }
@@ -28,7 +67,7 @@ fn convert_read_dir_to_filename_collection(
     file_collection: ReadDir,
     extended_attr: bool,
     width: usize,
-) -> String {
+) -> Result<String, FileEntryParsingError> {
     let (directories, files): (Vec<DirEntry>, Vec<DirEntry>) = file_collection
         .into_iter()
         .filter_map(|dir_entry| dir_entry.ok())
@@ -37,23 +76,23 @@ fn convert_read_dir_to_filename_collection(
         let date_created_text = "Date Created";
         let date_created_heading = date_created_text
             .to_string()
-            .add(" ".repeat(20 - date_created_text.len()).as_str());
+            .add(" ".repeat(24 - date_created_text.len()).as_str());
         let date_modified_text = "Date Modified";
         let date_modified_heading = date_modified_text
             .to_string()
-            .add(" ".repeat(20 - date_modified_text.len()).as_str());
+            .add(" ".repeat(24 - date_modified_text.len()).as_str());
         let permissions_heading = String::from("Permissions ");
-        let remaining_width = width - 52;
+        let remaining_width = width - 60;
         let name_text = "Name";
         let owner_text = "Owner";
         let total_file_name_space = (0.7 * remaining_width as f64) as usize;
-        let total_owener_space = (0.3 * remaining_width as f64) as usize;
+        let total_owner_space = (0.3 * remaining_width as f64) as usize;
         let name_heading = name_text
             .to_string()
             .add(" ".repeat(total_file_name_space - name_text.len()).as_str());
         let owner_heading = owner_text
             .to_string()
-            .add(" ".repeat(total_owener_space - owner_text.len()).as_str());
+            .add(" ".repeat(total_owner_space - owner_text.len()).as_str());
         let mut header = "".to_string();
         vec![
             header
@@ -67,11 +106,37 @@ fn convert_read_dir_to_filename_collection(
     } else {
         vec![String::from("Name:"), String::from("=").repeat(width)]
     };
-    let mut string_list_of_files = format_each_entry(files, FLOPPY);
+
+    let mut string_list_of_files = if extended_attr && width > 80 {
+        files
+            .into_iter()
+            .map(|dir| {
+                let file_name_as_path = dir.path();
+                let file_name = file_name_as_path.to_str().unwrap();
+                let created_since_epoch = dir
+                    .metadata()
+                    .unwrap()
+                    .created()
+                    .unwrap()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap();
+                let date_created = DateTime::<Utc>::from_timestamp(
+                    created_since_epoch.as_secs() as i64,
+                    created_since_epoch.subsec_nanos(),
+                )
+                .unwrap()
+                .format("%Y-%m-%d %H:%M:%S%.3f")
+                .to_string();
+                [FLOPPY, file_name, &date_created].join(" ")
+            })
+            .collect()
+    } else {
+        format_each_entry(files, FLOPPY)
+    };
     let mut string_list_of_dirs = format_each_entry(directories, FOLDER);
     header_row.append(&mut string_list_of_files);
     header_row.append(&mut string_list_of_dirs);
-    header_row.join("\n")
+    Ok(header_row.join("\n"))
 }
 
 fn format_each_entry(dir_entries: Vec<DirEntry>, icon: &str) -> Vec<String> {
@@ -100,8 +165,10 @@ pub fn manage_output(config: Config) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{DateTime, TimeZone, Timelike, Utc};
     use std::fs;
     use std::fs::File;
+    use std::time::SystemTime;
     use tempfile::*;
 
     const FILE_1_NAME: &str = "file_1.txt";
@@ -250,17 +317,50 @@ mod tests {
             target_file: "".to_string(),
             extended_attributes: true,
         };
-        // Date Created and Date Modified = 20 each, Permissions = 12 (word length only), divide rest 70/30 Name/Owner
-        let expected_header = "Name                             Date Created        Owner         Permissions Date Modified       ";
+        // Date Created and Date Modified = 24 each, Permissions = 12 (word length only), divide rest 70/30 Name/Owner
+        let expected_header = "Name                        Date Created            Owner       Permissions Date Modified           ";
         let contents = list_contents(&config, 100).unwrap();
         let lines_of_content: Vec<&str> = contents.split('\n').collect();
         let header = lines_of_content[0];
         assert_eq!(expected_header, header);
     }
 
-    //contains rows that include the extended attributes when true
+    #[test]
+    fn contains_date_created_attr() {
+        let temp_dir = tempdir().unwrap();
+        let file_1 = temp_dir.path().join(FILE_1_NAME);
+        let file_2 = temp_dir.path().join(FILE_2_NAME);
+        File::create(&file_1).unwrap();
+        File::create(&file_2).unwrap();
+        assert!(file_1.as_path().exists());
+        assert!(file_2.as_path().exists());
+        let expected_file_1_modified = file_1.metadata().unwrap().created().unwrap();
+        let date_as_time_since_epoch = expected_file_1_modified
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap();
+        let sec_component = date_as_time_since_epoch.as_secs();
+        let nano_component = date_as_time_since_epoch.subsec_nanos();
+        let date_struct =
+            DateTime::<Utc>::from_timestamp(sec_component as i64, nano_component).unwrap();
+        let expected_date = date_struct.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+
+        let config = Config {
+            target: temp_dir.path().to_str().unwrap().to_string(),
+            to_file: false,
+            target_file: "".to_string(),
+            extended_attributes: true,
+        };
+        let contents = list_contents(&config, 400).unwrap();
+        println!("{}", contents);
+        assert!(contents.contains(expected_date.as_str()));
+    }
+
+    //contains rows that include owner when extended_attr is true
+    //contains rows that include Permissions String when extended_attr is true
+    //contains rows that include Date Modified when extended_attr is true
     //rows do not contain extended attributes when false
     //long file names are shortened for small widths to maintain extended attributes
     //spaces inserted between fields match intended widths of each column
     //all fields end with one space even if overflowed
+    // returns an error when the console wdith is too small for extended attributes
 }
