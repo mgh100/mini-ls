@@ -12,6 +12,8 @@ use std::{fmt, fs, io};
 const FLOPPY: &str = "\u{1F4BE}";
 const FOLDER: &str = "\u{1F4C1}";
 
+const DATE_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.3f";
+
 #[derive(Debug, Clone)]
 pub enum FileEntryParsingError {
     UnableToReadDir {
@@ -73,36 +75,7 @@ fn convert_read_dir_to_filename_collection(
         .filter_map(|dir_entry| dir_entry.ok())
         .partition(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()));
     let mut header_row = if extended_attr && width > 80 {
-        let date_created_text = "Date Created";
-        let date_created_heading = date_created_text
-            .to_string()
-            .add(" ".repeat(24 - date_created_text.len()).as_str());
-        let date_modified_text = "Date Modified";
-        let date_modified_heading = date_modified_text
-            .to_string()
-            .add(" ".repeat(24 - date_modified_text.len()).as_str());
-        let permissions_heading = String::from("Permissions ");
-        let remaining_width = width - 60;
-        let name_text = "Name";
-        let owner_text = "Owner";
-        let total_file_name_space = (0.7 * remaining_width as f64) as usize;
-        let total_owner_space = (0.3 * remaining_width as f64) as usize;
-        let name_heading = name_text
-            .to_string()
-            .add(" ".repeat(total_file_name_space - name_text.len()).as_str());
-        let owner_heading = owner_text
-            .to_string()
-            .add(" ".repeat(total_owner_space - owner_text.len()).as_str());
-        let mut header = "".to_string();
-        vec![
-            header
-                + name_heading.as_str()
-                + date_created_heading.as_str()
-                + owner_heading.as_str()
-                + permissions_heading.as_str()
-                + date_modified_heading.as_str(),
-            String::from("=").repeat(width),
-        ]
+        create_extended_attr_header(width)
     } else {
         vec![String::from("Name:"), String::from("=").repeat(width)]
     };
@@ -110,25 +83,7 @@ fn convert_read_dir_to_filename_collection(
     let mut string_list_of_files = if extended_attr && width > 80 {
         files
             .into_iter()
-            .map(|dir| {
-                let file_name_as_path = dir.path();
-                let file_name = file_name_as_path.to_str().unwrap();
-                let created_since_epoch = dir
-                    .metadata()
-                    .unwrap()
-                    .created()
-                    .unwrap()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap();
-                let date_created = DateTime::<Utc>::from_timestamp(
-                    created_since_epoch.as_secs() as i64,
-                    created_since_epoch.subsec_nanos(),
-                )
-                .unwrap()
-                .format("%Y-%m-%d %H:%M:%S%.3f")
-                .to_string();
-                [FLOPPY, file_name, &date_created].join(" ")
-            })
+            .map(format_file_entry_with_ext_attr)
             .collect()
     } else {
         format_each_entry(files, FLOPPY)
@@ -137,6 +92,52 @@ fn convert_read_dir_to_filename_collection(
     header_row.append(&mut string_list_of_files);
     header_row.append(&mut string_list_of_dirs);
     Ok(header_row.join("\n"))
+}
+
+fn create_extended_attr_header(width: usize) -> Vec<String> {
+    let date_created_heading = create_heading_of_width(24usize, "Date Created");
+    let date_modified_heading = create_heading_of_width(24usize, "Date Modified");
+    let permissions_heading = create_heading_of_width(12usize, "Permissions");
+    let remaining_width = width - 60;
+    let name_heading = create_heading_of_width(remaining_width, "Name");
+    let header = "".to_string();
+    vec![
+        header
+            + name_heading.as_str()
+            + date_created_heading.as_str()
+            + permissions_heading.as_str()
+            + date_modified_heading.as_str(),
+        String::from("=").repeat(width),
+    ]
+}
+
+fn create_heading_of_width(head_width: usize, name: &str) -> String {
+    name.to_string()
+        .add(" ".repeat(head_width - name.len()).as_str())
+}
+
+fn format_file_entry_with_ext_attr(dir: DirEntry) -> String {
+    let file_name_as_path = dir.path();
+    let file_name = file_name_as_path.to_str().unwrap();
+    let meta_data = dir.metadata().unwrap();
+    let created_since_epoch = meta_data
+        .created()
+        .unwrap()
+        .duration_since(UNIX_EPOCH)
+        .unwrap();
+    let date_created = DateTime::<Utc>::from_timestamp(
+        created_since_epoch.as_secs() as i64,
+        created_since_epoch.subsec_nanos(),
+    )
+    .unwrap()
+    .format(DATE_FORMAT)
+    .to_string();
+    let permissions = if meta_data.permissions().readonly() {
+        "read only "
+    } else {
+        "writable "
+    };
+    [FLOPPY, file_name, &date_created, permissions].join(" ")
 }
 
 fn format_each_entry(dir_entries: Vec<DirEntry>, icon: &str) -> Vec<String> {
@@ -165,7 +166,7 @@ pub fn manage_output(config: Config) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, TimeZone, Timelike, Utc};
+    use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
     use std::fs;
     use std::fs::File;
     use std::time::SystemTime;
@@ -176,22 +177,22 @@ mod tests {
     const FLOPPY_ICON: &str = "\u{1F4BE}";
     const FOLDER_ICON: &str = "\u{1F4C1}";
 
-    fn setup_basic_test() -> TempDir {
+    fn setup_basic_test() -> (TempDir, File, File) {
         let temp_dir = tempdir().unwrap();
         let file_1 = temp_dir.path().join(FILE_1_NAME);
         let file_2 = temp_dir.path().join(FILE_2_NAME);
-        File::create(&file_1).unwrap();
-        File::create(&file_2).unwrap();
+        let file_1_as_file = File::create(&file_1).unwrap();
+        let file_2_as_file = File::create(&file_2).unwrap();
         assert!(file_1.as_path().exists());
         assert!(file_2.as_path().exists());
-        temp_dir
+        (temp_dir, file_1_as_file, file_2_as_file)
     }
 
     fn get_typical_config(dir: Option<TempDir>) -> (Config, TempDir) {
         let temp_dir = if let Some(dir_arg) = dir {
             dir_arg
         } else {
-            setup_basic_test()
+            setup_basic_test().0
         };
         let args = vec![
             String::from("./mini-ls"),
@@ -225,7 +226,7 @@ mod tests {
 
     #[test]
     fn includes_folder_icon_for_sub_folders() {
-        let temp_dir = setup_basic_test();
+        let (temp_dir, ..) = setup_basic_test();
         let folder_2 = temp_dir.path().join("sub_folder");
         fs::create_dir(folder_2.as_path()).unwrap();
         assert!(folder_2.exists());
@@ -243,7 +244,7 @@ mod tests {
 
     #[test]
     fn writes_to_file() {
-        let temp_dir = setup_basic_test();
+        let (temp_dir, ..) = setup_basic_test();
         let file_1 = temp_dir.path().join("log.txt");
         let config = Config {
             target: temp_dir.path().to_str().unwrap().to_string(),
@@ -260,7 +261,7 @@ mod tests {
 
     #[test]
     fn returns_an_error_on_non_existent_directories() {
-        let temp_dir = setup_basic_test();
+        let (temp_dir, ..) = setup_basic_test();
         let target = temp_dir.path().join("no_folder");
         let config = Config {
             target: target.as_path().to_str().unwrap().to_string(),
@@ -279,7 +280,6 @@ mod tests {
         assert!(contents.starts_with("Name"));
         assert!(!contents.contains("Date Created"));
         assert!(!contents.contains("Date Modified"));
-        assert!(!contents.contains("Owner"));
         assert!(!contents.contains("Permissions"));
     }
 
@@ -293,7 +293,7 @@ mod tests {
 
     #[test]
     fn contains_a_header_for_extra_attributes_when_configured() {
-        let temp_dir = setup_basic_test();
+        let (temp_dir, ..) = setup_basic_test();
         let config = Config {
             target: temp_dir.path().to_str().unwrap().to_string(),
             to_file: false,
@@ -304,21 +304,20 @@ mod tests {
         assert!(contents.starts_with("Name"));
         assert!(contents.contains("Date Created"));
         assert!(contents.contains("Date Modified"));
-        assert!(contents.contains("Owner"));
         assert!(contents.contains("Permissions"));
     }
 
     #[test]
     fn spaces_out_columns() {
-        let temp_dir = setup_basic_test();
+        let (temp_dir, ..) = setup_basic_test();
         let config = Config {
             target: temp_dir.path().to_str().unwrap().to_string(),
             to_file: false,
             target_file: "".to_string(),
             extended_attributes: true,
         };
-        // Date Created and Date Modified = 24 each, Permissions = 12 (word length only), divide rest 70/30 Name/Owner
-        let expected_header = "Name                        Date Created            Owner       Permissions Date Modified           ";
+        // Date Created and Date Modified = 24 each, rest Name
+        let expected_header = "Name                                    Date Created            Permissions Date Modified           ";
         let contents = list_contents(&config, 100).unwrap();
         let lines_of_content: Vec<&str> = contents.split('\n').collect();
         let header = lines_of_content[0];
@@ -327,13 +326,7 @@ mod tests {
 
     #[test]
     fn contains_date_created_attr() {
-        let temp_dir = tempdir().unwrap();
-        let file_1 = temp_dir.path().join(FILE_1_NAME);
-        let file_2 = temp_dir.path().join(FILE_2_NAME);
-        File::create(&file_1).unwrap();
-        File::create(&file_2).unwrap();
-        assert!(file_1.as_path().exists());
-        assert!(file_2.as_path().exists());
+        let (temp_dir, file_1, _file_2) = setup_basic_test();
         let expected_file_1_modified = file_1.metadata().unwrap().created().unwrap();
         let date_as_time_since_epoch = expected_file_1_modified
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -342,7 +335,7 @@ mod tests {
         let nano_component = date_as_time_since_epoch.subsec_nanos();
         let date_struct =
             DateTime::<Utc>::from_timestamp(sec_component as i64, nano_component).unwrap();
-        let expected_date = date_struct.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+        let expected_date = date_struct.format(DATE_FORMAT).to_string();
 
         let config = Config {
             target: temp_dir.path().to_str().unwrap().to_string(),
@@ -351,13 +344,31 @@ mod tests {
             extended_attributes: true,
         };
         let contents = list_contents(&config, 400).unwrap();
-        println!("{}", contents);
         assert!(contents.contains(expected_date.as_str()));
     }
 
-    //contains rows that include owner when extended_attr is true
-    //contains rows that include Permissions String when extended_attr is true
-    //contains rows that include Date Modified when extended_attr is true
+    #[test]
+    fn contains_permissions_when_extended_attr() {
+        let (temp_dir, file_1, _file_2) = setup_basic_test();
+        let mut permissions = file_1.metadata().unwrap().permissions();
+        permissions.set_readonly(true);
+        file_1.set_permissions(permissions).unwrap();
+        assert!(file_1.metadata().unwrap().permissions().readonly());
+        let config = Config {
+            target: temp_dir.path().to_str().unwrap().to_string(),
+            to_file: false,
+            target_file: "".to_string(),
+            extended_attributes: true,
+        };
+        let contents = list_contents(&config, 400).unwrap();
+        let lines: Vec<&str> = contents.split('\n').collect();
+        assert_eq!(4, lines.len());
+        assert!(lines[2].contains("read only"));
+        assert!(!lines[2].contains("writable"));
+        assert!(lines[3].contains("writable"));
+        assert!(!lines[3].contains("read only"));
+    }
+
     //rows do not contain extended attributes when false
     //long file names are shortened for small widths to maintain extended attributes
     //spaces inserted between fields match intended widths of each column
