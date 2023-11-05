@@ -3,7 +3,7 @@ pub mod arg_processing;
 use crate::arg_processing::Config;
 use chrono::{DateTime, Utc};
 use std::fmt::Formatter;
-use std::fs::{DirEntry, ReadDir};
+use std::fs::{DirEntry, Metadata, ReadDir};
 use std::ops::Add;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
@@ -37,7 +37,7 @@ impl fmt::Display for FileEntryParsingError {
     }
 }
 
-impl From<FileEntryParsingError> for std::io::Error {
+impl From<FileEntryParsingError> for io::Error {
     fn from(value: FileEntryParsingError) -> Self {
         match value {
             FileEntryParsingError::UnableToReadDir { original_error, .. } => {
@@ -81,10 +81,7 @@ fn convert_read_dir_to_filename_collection(
     };
 
     let mut string_list_of_files = if extended_attr && width > 80 {
-        files
-            .into_iter()
-            .map(format_file_entry_with_ext_attr)
-            .collect()
+        format_each_ext_attr_entry(&files)
     } else {
         format_each_entry(files, FLOPPY)
     };
@@ -116,28 +113,36 @@ fn create_heading_of_width(head_width: usize, name: &str) -> String {
         .add(" ".repeat(head_width - name.len()).as_str())
 }
 
-fn format_file_entry_with_ext_attr(dir: DirEntry) -> String {
+fn format_each_ext_attr_entry(files: &[DirEntry]) -> Vec<String> {
+    files.iter().map(format_file_entry_with_ext_attr).collect()
+}
+
+fn format_file_entry_with_ext_attr(dir: &DirEntry) -> String {
     let file_name_as_path = dir.path();
     let file_name = file_name_as_path.to_str().unwrap();
     let meta_data = dir.metadata().unwrap();
-    let created_since_epoch = meta_data
-        .created()
-        .unwrap()
-        .duration_since(UNIX_EPOCH)
-        .unwrap();
-    let date_created = DateTime::<Utc>::from_timestamp(
-        created_since_epoch.as_secs() as i64,
-        created_since_epoch.subsec_nanos(),
-    )
-    .unwrap()
-    .format(DATE_FORMAT)
-    .to_string();
+    let date_created = calc_date_created(&meta_data);
     let permissions = if meta_data.permissions().readonly() {
         "read only "
     } else {
         "writable "
     };
     [FLOPPY, file_name, &date_created, permissions].join(" ")
+}
+
+fn calc_date_created(meta_data: &Metadata) -> String {
+    let created_since_epoch = meta_data
+        .created()
+        .unwrap()
+        .duration_since(UNIX_EPOCH)
+        .unwrap();
+    DateTime::<Utc>::from_timestamp(
+        created_since_epoch.as_secs() as i64,
+        created_since_epoch.subsec_nanos(),
+    )
+    .unwrap()
+    .format(DATE_FORMAT)
+    .to_string()
 }
 
 fn format_each_entry(dir_entries: Vec<DirEntry>, icon: &str) -> Vec<String> {
