@@ -4,6 +4,7 @@ use crate::arg_processing::Config;
 use chrono::{DateTime, Utc};
 use std::fmt::Formatter;
 use std::fs::{DirEntry, Metadata, ReadDir};
+use std::io::ErrorKind;
 use std::ops::Add;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
@@ -20,6 +21,10 @@ pub enum FileEntryParsingError {
         target: String,
         original_error: io::ErrorKind,
     },
+    FileNameInvalidUnicode,
+    MissingMetaDataError {
+        original_error: io::ErrorKind,
+    },
 }
 
 impl fmt::Display for FileEntryParsingError {
@@ -33,6 +38,12 @@ impl fmt::Display for FileEntryParsingError {
                 "was unable to read the contents of {} due to {:?}",
                 target, original_error
             ),
+            FileEntryParsingError::FileNameInvalidUnicode => {
+                write!(f, "file entry did not consist of valid unicode")
+            }
+            FileEntryParsingError::MissingMetaDataError { original_error } => {
+                write!(f, "unable to read meta data due to {}", original_error)
+            }
         }
     }
 }
@@ -41,6 +52,12 @@ impl From<FileEntryParsingError> for io::Error {
     fn from(value: FileEntryParsingError) -> Self {
         match value {
             FileEntryParsingError::UnableToReadDir { original_error, .. } => {
+                std::io::Error::from(original_error)
+            }
+            FileEntryParsingError::FileNameInvalidUnicode => {
+                std::io::Error::from(ErrorKind::InvalidData)
+            }
+            FileEntryParsingError::MissingMetaDataError { original_error, .. } => {
                 std::io::Error::from(original_error)
             }
         }
@@ -70,10 +87,8 @@ fn convert_read_dir_to_filename_collection(
     extended_attr: bool,
     width: usize,
 ) -> Result<String, FileEntryParsingError> {
-    let (directories, files): (Vec<DirEntry>, Vec<DirEntry>) = file_collection
-        .into_iter()
-        .filter_map(|dir_entry| dir_entry.ok())
-        .partition(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()));
+    let (directories, files): (Vec<DirEntry>, Vec<DirEntry>) =
+        split_into_files_and_dirs(file_collection);
     let mut header_row = if extended_attr && width > 80 {
         create_extended_attr_header(width)
     } else {
@@ -81,14 +96,21 @@ fn convert_read_dir_to_filename_collection(
     };
 
     let mut string_list_of_files = if extended_attr && width > 80 {
-        format_each_ext_attr_entry(&files)
+        format_each_ext_attr_entry(&files)?
     } else {
-        format_each_entry(files, FLOPPY)
+        format_each_entry(files, FLOPPY)?
     };
-    let mut string_list_of_dirs = format_each_entry(directories, FOLDER);
+    let mut string_list_of_dirs = format_each_entry(directories, FOLDER)?;
     header_row.append(&mut string_list_of_files);
     header_row.append(&mut string_list_of_dirs);
     Ok(header_row.join("\n"))
+}
+
+fn split_into_files_and_dirs(file_collection: ReadDir) -> (Vec<DirEntry>, Vec<DirEntry>) {
+    file_collection
+        .into_iter()
+        .filter_map(|dir_entry| dir_entry.ok())
+        .partition(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()))
 }
 
 fn create_extended_attr_header(width: usize) -> Vec<String> {
@@ -113,50 +135,68 @@ fn create_heading_of_width(head_width: usize, name: &str) -> String {
         .add(" ".repeat(head_width - name.len()).as_str())
 }
 
-fn format_each_ext_attr_entry(files: &[DirEntry]) -> Vec<String> {
+fn format_each_ext_attr_entry(files: &[DirEntry]) -> Result<Vec<String>, FileEntryParsingError> {
     files.iter().map(format_file_entry_with_ext_attr).collect()
 }
 
-fn format_file_entry_with_ext_attr(dir: &DirEntry) -> String {
+fn format_file_entry_with_ext_attr(dir: &DirEntry) -> Result<String, FileEntryParsingError> {
     let file_name_as_path = dir.path();
-    let file_name = file_name_as_path.to_str().unwrap();
-    let meta_data = dir.metadata().unwrap();
+    let file_name = match file_name_as_path.to_str() {
+        Some(file_name) => file_name,
+        None => return Err(FileEntryParsingError::FileNameInvalidUnicode),
+    };
+    let meta_data = match dir.metadata() {
+        Ok(meta) => meta,
+        Err(error) => {
+            return Err(FileEntryParsingError::MissingMetaDataError {
+                original_error: error.kind(),
+            })
+        }
+    };
     let date_created = calc_date_created(&meta_data);
     let permissions = if meta_data.permissions().readonly() {
         "read only "
     } else {
         "writable "
     };
-    [FLOPPY, file_name, &date_created, permissions].join(" ")
+    Ok([FLOPPY, file_name, &date_created, permissions].join(" "))
 }
 
 fn calc_date_created(meta_data: &Metadata) -> String {
     let created_since_epoch = meta_data
         .created()
-        .unwrap()
+        .expect("Not anticipated to run on systems that do not implement date created for files")
         .duration_since(UNIX_EPOCH)
-        .unwrap();
+        .expect("Clock may have gone backwards");
     DateTime::<Utc>::from_timestamp(
         created_since_epoch.as_secs() as i64,
         created_since_epoch.subsec_nanos(),
     )
-    .unwrap()
+    .expect(
+        "An invalid timestamp was provided, given this is from the system this should not happen",
+    )
     .format(DATE_FORMAT)
     .to_string()
 }
 
-fn format_each_entry(dir_entries: Vec<DirEntry>, icon: &str) -> Vec<String> {
-    dir_entries
+fn format_each_entry(
+    dir_entries: Vec<DirEntry>,
+    icon: &str,
+) -> Result<Vec<String>, FileEntryParsingError> {
+    Ok(dir_entries
         .into_iter()
-        .map(convert_dir_entry_to_str)
-        .map(|file_name| icon.to_owned() + " " + &*file_name)
-        .collect()
+        .filter_map(|entry| convert_dir_entry_to_str(entry).ok())
+        .map(|file_name| icon.to_owned() + " " + &file_name)
+        .collect())
 }
 
-fn convert_dir_entry_to_str(dir_entry: DirEntry) -> String {
+fn convert_dir_entry_to_str(dir_entry: DirEntry) -> Result<String, FileEntryParsingError> {
     let file_name = dir_entry.file_name();
-    let normal_str = file_name.to_str().unwrap();
-    String::from(normal_str)
+    let normal_str = match file_name.to_str() {
+        Some(name) => name,
+        None => return Err(FileEntryParsingError::FileNameInvalidUnicode),
+    };
+    Ok(String::from(normal_str))
 }
 
 pub fn manage_output(config: Config) -> std::io::Result<()> {
@@ -171,7 +211,7 @@ pub fn manage_output(config: Config) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
+    use chrono::{DateTime, Utc};
     use std::fs;
     use std::fs::File;
     use std::time::SystemTime;
