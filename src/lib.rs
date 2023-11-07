@@ -1,13 +1,14 @@
 pub mod arg_processing;
 
 use crate::arg_processing::Config;
+use crate::TimeOptions::{Created, Modified};
 use chrono::{DateTime, Utc};
 use std::fmt::Formatter;
 use std::fs::{DirEntry, Metadata, ReadDir};
 use std::io::ErrorKind;
 use std::ops::Add;
 use std::path::Path;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 use std::{fmt, fs, io};
 
 const FLOPPY: &str = "\u{1F4BE}";
@@ -25,6 +26,11 @@ pub enum FileEntryParsingError {
     MissingMetaDataError {
         original_error: io::ErrorKind,
     },
+}
+
+enum TimeOptions {
+    Created,
+    Modified,
 }
 
 impl fmt::Display for FileEntryParsingError {
@@ -153,30 +159,53 @@ fn format_file_entry_with_ext_attr(dir: &DirEntry) -> Result<String, FileEntryPa
             })
         }
     };
-    let date_created = calc_date_created(&meta_data);
+    let date_created = get_formatted_date(&meta_data, Created);
     let permissions = if meta_data.permissions().readonly() {
         "read only "
     } else {
         "writable "
     };
-    Ok([FLOPPY, file_name, &date_created, permissions].join(" "))
+    let date_modified = get_formatted_date(&meta_data, Modified);
+    Ok([
+        FLOPPY,
+        file_name,
+        &date_created,
+        permissions,
+        &date_modified,
+    ]
+    .join(" "))
 }
 
-fn calc_date_created(meta_data: &Metadata) -> String {
-    let created_since_epoch = meta_data
-        .created()
-        .expect("Not anticipated to run on systems that do not implement date created for files")
-        .duration_since(UNIX_EPOCH)
-        .expect("Clock may have gone backwards");
+fn get_formatted_date(meta_data: &Metadata, options: TimeOptions) -> String {
+    let since_epoch = match options {
+        Created => meta_data
+            .created()
+            .expect(
+                "Not anticipated to run on systems that do not implement date created for files",
+            )
+            .duration_since(UNIX_EPOCH)
+            .expect("Clock may have gone backwards"),
+        TimeOptions::Modified => meta_data
+            .modified()
+            .expect(
+                "Not anticipated to run on systems that do not implement date modified for files",
+            )
+            .duration_since(UNIX_EPOCH)
+            .expect("Clock may have gone backwards"),
+    };
+    format_date(since_epoch)
+}
+
+fn format_date(since_epoch: Duration) -> String {
     DateTime::<Utc>::from_timestamp(
-        created_since_epoch.as_secs() as i64,
-        created_since_epoch.subsec_nanos(),
+        since_epoch.as_secs() as i64,
+        since_epoch.subsec_nanos(),
     )
-    .expect(
-        "An invalid timestamp was provided, given this is from the system this should not happen",
-    )
-    .format(DATE_FORMAT)
-    .to_string()
+      .expect(
+          "An invalid timestamp was provided, given this is from the system this should not happen",
+      )
+      .format(DATE_FORMAT)
+      .to_string()
 }
 
 fn format_each_entry(
@@ -212,9 +241,10 @@ pub fn manage_output(config: Config) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use chrono::{DateTime, Utc};
-    use std::fs;
     use std::fs::File;
+    use std::io::Write;
     use std::time::SystemTime;
+    use std::{fs, thread, time};
     use tempfile::*;
 
     const FILE_1_NAME: &str = "file_1.txt";
@@ -372,8 +402,12 @@ mod tests {
     #[test]
     fn contains_date_created_attr() {
         let (temp_dir, file_1, _file_2) = setup_basic_test();
-        let expected_file_1_modified = file_1.metadata().unwrap().created().unwrap();
-        let date_as_time_since_epoch = expected_file_1_modified
+        let expected_file_1_created = file_1.metadata().unwrap().created().unwrap();
+        assert_output_contains_time(&expected_file_1_created, &temp_dir);
+    }
+
+    fn assert_output_contains_time(expected_file_1_created: &SystemTime, temp_dir: &TempDir) {
+        let date_as_time_since_epoch = expected_file_1_created
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap();
         let sec_component = date_as_time_since_epoch.as_secs();
@@ -414,9 +448,35 @@ mod tests {
         assert!(!lines[3].contains("read only"));
     }
 
+    #[test]
+    fn contains_date_modified() {
+        let (temp_dir, mut file_1, _file_2) = setup_basic_test();
+        let pause = time::Duration::from_millis(1000);
+        thread::sleep(pause);
+        file_1.write_all(b"Some text to modifiy the file").unwrap();
+        file_1.flush().unwrap();
+        let expected_file_1_created = file_1.metadata().unwrap().modified().unwrap();
+        assert_output_contains_time(&expected_file_1_created, &temp_dir);
+    }
+
+    #[test]
+    fn does_not_contain_ext_attrs_headers_when_not_set() {
+        let (temp_dir, file_1, _file_2) = setup_basic_test();
+        let config = Config {
+            target: temp_dir.path().to_str().unwrap().to_string(),
+            to_file: false,
+            target_file: "".to_string(),
+            extended_attributes: false,
+        };
+        let contents = list_contents(&config, 400).unwrap();
+        assert!(!contents.contains("Date Created"));
+        assert!(!contents.contains("Date Modified"));
+        assert!(!contents.contains("Permissions"));
+    }
+
     //rows do not contain extended attributes when false
     //long file names are shortened for small widths to maintain extended attributes
     //spaces inserted between fields match intended widths of each column
     //all fields end with one space even if overflowed
-    // returns an error when the console wdith is too small for extended attributes
+    // returns an error when the console width is too small for extended attributes
 }
