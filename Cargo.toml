@@ -9,6 +9,9 @@ edition = "2021"
 dirs = "5.0.1"
 term_size = "0.3.2"
 chrono = "0.4.31"
+unicode-segmentation = "1.10.1"
 
 [dev-dependencies]
+filepath = "0.1.2"
 tempfile = "3"
+

@@ -10,6 +10,7 @@ use std::ops::Add;
 use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
 use std::{fmt, fs, io};
+use unicode_segmentation::UnicodeSegmentation;
 
 const FLOPPY: &str = "\u{1F4BE}";
 const FOLDER: &str = "\u{1F4C1}";
@@ -102,7 +103,8 @@ fn convert_read_dir_to_filename_collection(
     };
 
     let mut string_list_of_files = if extended_attr && width > 80 {
-        format_each_ext_attr_entry(&files)?
+        let file_name_max_length = width - 63;
+        format_each_ext_attr_entry(&files, file_name_max_length)?
     } else {
         format_each_entry(files, FLOPPY)?
     };
@@ -141,14 +143,23 @@ fn create_heading_of_width(head_width: usize, name: &str) -> String {
         .add(" ".repeat(head_width - name.len()).as_str())
 }
 
-fn format_each_ext_attr_entry(files: &[DirEntry]) -> Result<Vec<String>, FileEntryParsingError> {
-    files.iter().map(format_file_entry_with_ext_attr).collect()
+fn format_each_ext_attr_entry(
+    files: &[DirEntry],
+    max_file_name_width: usize,
+) -> Result<Vec<String>, FileEntryParsingError> {
+    files
+        .iter()
+        .map(|dir| format_file_entry_with_ext_attr(dir, max_file_name_width))
+        .collect()
 }
 
-fn format_file_entry_with_ext_attr(dir: &DirEntry) -> Result<String, FileEntryParsingError> {
+fn format_file_entry_with_ext_attr(
+    dir: &DirEntry,
+    allowed_width: usize,
+) -> Result<String, FileEntryParsingError> {
     let file_name_as_path = dir.path();
     let file_name = match file_name_as_path.to_str() {
-        Some(file_name) => file_name,
+        Some(file_name) => limit_filename_length(allowed_width, file_name),
         None => return Err(FileEntryParsingError::FileNameInvalidUnicode),
     };
     let meta_data = match dir.metadata() {
@@ -168,12 +179,24 @@ fn format_file_entry_with_ext_attr(dir: &DirEntry) -> Result<String, FileEntryPa
     let date_modified = get_formatted_date(&meta_data, Modified);
     Ok([
         FLOPPY,
-        file_name,
+        file_name.as_str(),
         &date_created,
         permissions,
         &date_modified,
     ]
     .join(" "))
+}
+
+fn limit_filename_length(allowed_width: usize, file_name: &str) -> String {
+    if file_name.graphemes(true).count() >= allowed_width {
+        let file_name_strs = file_name
+            .graphemes(true)
+            .take(allowed_width)
+            .collect::<Vec<&str>>();
+        file_name_strs.join("")
+    } else {
+        file_name.to_string()
+    }
 }
 
 fn get_formatted_date(meta_data: &Metadata, options: TimeOptions) -> String {
@@ -241,11 +264,13 @@ pub fn manage_output(config: Config) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use chrono::{DateTime, Utc};
+    use filepath::FilePath;
     use std::fs::File;
     use std::io::Write;
     use std::time::SystemTime;
     use std::{fs, thread, time};
     use tempfile::*;
+    use unicode_segmentation::UnicodeSegmentation;
 
     const FILE_1_NAME: &str = "file_1.txt";
     const FILE_2_NAME: &str = "file_2.txt";
@@ -474,9 +499,64 @@ mod tests {
         assert!(!contents.contains("Permissions"));
     }
 
-    //rows do not contain extended attributes when false
-    //long file names are shortened for small widths to maintain extended attributes
+    #[test]
+    fn does_not_contain_extended_attributes_when_not_set() {
+        let (temp_dir, file_1, _file_2) = setup_basic_test();
+        let config = Config {
+            target: temp_dir.path().to_str().unwrap().to_string(),
+            to_file: false,
+            target_file: "".to_string(),
+            extended_attributes: false,
+        };
+        let contents = list_contents(&config, 400).unwrap();
+        let lines_of_content: Vec<&str> = contents.split('\n').collect();
+        let first_file_line = lines_of_content.get(2).unwrap();
+        let components: Vec<&str> = first_file_line.split_ascii_whitespace().collect();
+        assert_eq!(2, components.len());
+    }
+
+    #[test]
+    fn file_names_shortened_for_small_terminals_when_ext_attr_set() {
+        let long_file_name =
+            "very_long_filename_to_check_for_shortening_of_filename_on_small_consoles.txt";
+        let temp_dir = tempdir().unwrap();
+        let file_1 = temp_dir.path().join(long_file_name);
+        let file_2 = temp_dir.path().join(FILE_2_NAME);
+        let file_1_as_file = File::create(&file_1).unwrap();
+        let file_2_as_file = File::create(&file_2).unwrap();
+        assert!(file_1.as_path().exists());
+        assert!(file_2.as_path().exists());
+        let config = Config {
+            target: temp_dir.path().to_str().unwrap().to_string(),
+            to_file: false,
+            target_file: "".to_string(),
+            extended_attributes: true,
+        };
+        let current_reserved_length = 63;
+        let file_1_full_path = file_1.to_str().unwrap();
+        let compressed_width = file_1_full_path.graphemes(true).count(); //so always file path is smaller that console
+        let contents = list_contents(&config, compressed_width).unwrap();
+        let lines_of_content: Vec<&str> = contents.split('\n').collect();
+        let first_file_line = lines_of_content.get(2).unwrap();
+        let second_file_line = lines_of_content.get(3).unwrap();
+        let target_line = if first_file_line.contains("very_long") {
+            first_file_line
+        } else {
+            second_file_line
+        };
+        println!("{}", target_line);
+        assert_eq!(target_line.len(), compressed_width);
+        assert!(!target_line.contains(file_1_full_path));
+        let expected_content_chars: Vec<&str> = file_1_full_path
+            .graphemes(true)
+            .take(compressed_width - current_reserved_length)
+            .collect();
+        let expected_content = expected_content_chars.join("");
+        assert!(target_line.contains(&expected_content));
+    }
+
     //spaces inserted between fields match intended widths of each column
     //all fields end with one space even if overflowed
     // returns an error when the console width is too small for extended attributes
+    // limit filename length even without extended attributes but to total width
 }
