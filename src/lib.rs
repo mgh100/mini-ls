@@ -72,17 +72,6 @@ impl From<FileEntryParsingError> for io::Error {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum ConsoleFormattingError {
-    InadequateConsoleWidth,
-}
-
-impl fmt::Display for ConsoleFormattingError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "requires minimum width of 80")
-    }
-}
-
 fn list_contents(config: &Config, width: usize) -> Result<String, FileEntryParsingError> {
     let dir_read = fs::read_dir(&config.target);
     match dir_read {
