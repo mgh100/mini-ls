@@ -1,13 +1,14 @@
 pub mod arg_processing;
 
 use crate::arg_processing::Config;
+use crate::FileEntryParsingError::UnableToCalculatePathLengths;
 use crate::TimeOptions::{Created, Modified};
 use chrono::{DateTime, Utc};
 use std::fmt::Formatter;
 use std::fs::{DirEntry, Metadata, ReadDir};
 use std::io::ErrorKind;
 use std::ops::Add;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 use std::{fmt, fs, io};
 use unicode_segmentation::UnicodeSegmentation;
@@ -28,6 +29,7 @@ pub enum FileEntryParsingError {
     MissingMetaDataError {
         original_error: io::ErrorKind,
     },
+    UnableToCalculatePathLengths,
 }
 
 enum TimeOptions {
@@ -52,6 +54,9 @@ impl fmt::Display for FileEntryParsingError {
             FileEntryParsingError::MissingMetaDataError { original_error } => {
                 write!(f, "unable to read meta data due to {}", original_error)
             }
+            UnableToCalculatePathLengths => {
+                write!(f, "unable to calculate the length of any paths")
+            }
         }
     }
 }
@@ -68,6 +73,25 @@ impl From<FileEntryParsingError> for io::Error {
             FileEntryParsingError::MissingMetaDataError { original_error, .. } => {
                 std::io::Error::from(original_error)
             }
+            UnableToCalculatePathLengths => std::io::Error::from(ErrorKind::InvalidData),
+        }
+    }
+}
+
+struct FormattingCommand {
+    extended_attr: bool,
+    width: usize,
+    files: Vec<DirEntry>,
+    longest: usize,
+}
+
+impl FormattingCommand {
+    fn new(extended_attr: bool, width: usize, files: Vec<DirEntry>, longest: usize) -> Self {
+        FormattingCommand {
+            extended_attr,
+            width,
+            files,
+            longest,
         }
     }
 }
@@ -97,24 +121,13 @@ fn convert_read_dir_to_filename_collection(
 ) -> Result<String, FileEntryParsingError> {
     let (directories, files): (Vec<DirEntry>, Vec<DirEntry>) =
         split_into_files_and_dirs(file_collection);
-    let mut header_row = if extended_attr && width > 80 {
-        create_extended_attr_header(width)
-    } else {
-        vec![String::from("Name:"), String::from("=").repeat(width)]
+    let Some(longest) = analyse_longest(vec![&directories, &files]) else {
+        return Err(UnableToCalculatePathLengths);
     };
-
-    let mut string_list_of_files = if extended_attr && width > 80 {
-        let file_name_max_length = width - 63;
-        format_each_ext_attr_entry(&files, file_name_max_length)?
-    } else if extended_attr && width <= 80 {
-        panic!("requires minimum console width of 80");
-    } else {
-        format_each_entry(files, FLOPPY)?
-    };
-    let mut string_list_of_dirs = format_each_entry(directories, FOLDER)?;
-    header_row.append(&mut string_list_of_files);
-    header_row.append(&mut string_list_of_dirs);
-    Ok(header_row.join("\n"))
+    generate_textual_display(
+        FormattingCommand::new(extended_attr, width, files, longest),
+        directories,
+    )
 }
 
 fn split_into_files_and_dirs(file_collection: ReadDir) -> (Vec<DirEntry>, Vec<DirEntry>) {
@@ -124,11 +137,48 @@ fn split_into_files_and_dirs(file_collection: ReadDir) -> (Vec<DirEntry>, Vec<Di
         .partition(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()))
 }
 
-fn create_extended_attr_header(width: usize) -> Vec<String> {
+fn analyse_longest(entries: Vec<&Vec<DirEntry>>) -> Option<usize> {
+    let full_list: Vec<&DirEntry> = entries.iter().flat_map(|vector| vector.iter()).collect();
+    full_list
+        .into_iter()
+        .map(|dir_entry: &DirEntry| dir_entry.path())
+        .map(|path: PathBuf| {
+            let path_as_str_option = path.to_str();
+            let path_as_str = path_as_str_option.unwrap_or("");
+            String::from(path_as_str)
+        })
+        .map(|stringy| stringy.len())
+        .max()
+}
+
+fn generate_textual_display(
+    command: FormattingCommand,
+    directories: Vec<DirEntry>,
+) -> Result<String, FileEntryParsingError> {
+    let mut header_row = if command.extended_attr && command.width > 80 {
+        create_extended_attr_header(command.width, command.longest)
+    } else {
+        vec![
+            String::from("Name:"),
+            String::from("=").repeat(command.width),
+        ]
+    };
+    let mut string_list_of_files = orchestrate_formatting(command)?;
+    let mut string_list_of_dirs = format_each_entry(directories, FOLDER)?;
+    header_row.append(&mut string_list_of_files);
+    header_row.append(&mut string_list_of_dirs);
+    Ok(header_row.join("\n"))
+}
+
+fn create_extended_attr_header(width: usize, longest: usize) -> Vec<String> {
     let date_created_heading = create_heading_of_width(24usize, "Date Created");
     let date_modified_heading = create_heading_of_width(24usize, "Date Modified");
     let permissions_heading = create_heading_of_width(12usize, "Permissions");
-    let remaining_width = width - 60;
+    let remaining_width = if longest + 3 <= width - 60 {
+        longest + 3
+    } else {
+        width - 60
+    };
     let name_heading = create_heading_of_width(remaining_width, "Name");
     let header = "".to_string();
     vec![
@@ -139,6 +189,24 @@ fn create_extended_attr_header(width: usize) -> Vec<String> {
             + date_modified_heading.as_str(),
         String::from("=").repeat(width),
     ]
+}
+
+fn orchestrate_formatting(
+    command: FormattingCommand,
+) -> Result<Vec<String>, FileEntryParsingError> {
+    Ok(if command.extended_attr && command.width > 80 {
+        let available_filename_space = command.width - 63;
+        let file_name_target_length = if available_filename_space > command.longest {
+            command.longest
+        } else {
+            available_filename_space
+        };
+        format_each_ext_attr_entry(&command.files, file_name_target_length)?
+    } else if command.extended_attr && command.width <= 80 {
+        panic!("requires minimum console width of 80");
+    } else {
+        format_each_entry(command.files, FLOPPY)?
+    })
 }
 
 fn create_heading_of_width(head_width: usize, name: &str) -> String {
@@ -162,7 +230,7 @@ fn format_file_entry_with_ext_attr(
 ) -> Result<String, FileEntryParsingError> {
     let file_name_as_path = dir.path();
     let file_name = match file_name_as_path.to_str() {
-        Some(file_name) => limit_filename_length(allowed_width, file_name),
+        Some(file_name) => set_file_name_length(allowed_width, file_name),
         None => return Err(FileEntryParsingError::FileNameInvalidUnicode),
     };
     let meta_data = match dir.metadata() {
@@ -190,7 +258,7 @@ fn format_file_entry_with_ext_attr(
     .join(" "))
 }
 
-fn limit_filename_length(allowed_width: usize, file_name: &str) -> String {
+fn set_file_name_length(allowed_width: usize, file_name: &str) -> String {
     if file_name.graphemes(true).count() >= allowed_width {
         let file_name_strs = file_name
             .graphemes(true)
@@ -198,7 +266,9 @@ fn limit_filename_length(allowed_width: usize, file_name: &str) -> String {
             .collect::<Vec<&str>>();
         file_name_strs.join("")
     } else {
-        file_name.to_string()
+        let spacer_length = allowed_width - file_name.len();
+        let spacer = " ".repeat(spacer_length);
+        file_name.to_string() + spacer.as_str()
     }
 }
 
@@ -255,7 +325,14 @@ fn convert_dir_entry_to_str(dir_entry: DirEntry) -> Result<String, FileEntryPars
 }
 
 pub fn manage_output(config: Config) -> std::io::Result<()> {
-    let contents = list_contents(&config, 100)?;
+    let width = if !config.to_file {
+        term_size::dimensions()
+            .expect("unable to obtain console width")
+            .0
+    } else {
+        120
+    };
+    let contents = list_contents(&config, width)?;
     if config.to_file {
         return fs::write(Path::new(config.target_file.as_str()), contents);
     }
@@ -434,14 +511,7 @@ mod tests {
     }
 
     fn assert_output_contains_time(expected_file_1_created: &SystemTime, temp_dir: &TempDir) {
-        let date_as_time_since_epoch = expected_file_1_created
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap();
-        let sec_component = date_as_time_since_epoch.as_secs();
-        let nano_component = date_as_time_since_epoch.subsec_nanos();
-        let date_struct =
-            DateTime::<Utc>::from_timestamp(sec_component as i64, nano_component).unwrap();
-        let expected_date = date_struct.format(DATE_FORMAT).to_string();
+        let expected_date = calc_expected_date_string(expected_file_1_created);
 
         let config = Config {
             target: temp_dir.path().to_str().unwrap().to_string(),
@@ -451,6 +521,18 @@ mod tests {
         };
         let contents = list_contents(&config, 400).unwrap();
         assert!(contents.contains(expected_date.as_str()));
+    }
+
+    fn calc_expected_date_string(expected_file_1_created: &SystemTime) -> String {
+        let date_as_time_since_epoch = expected_file_1_created
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap();
+        let sec_component = date_as_time_since_epoch.as_secs();
+        let nano_component = date_as_time_since_epoch.subsec_nanos();
+        let date_struct =
+            DateTime::<Utc>::from_timestamp(sec_component as i64, nano_component).unwrap();
+        let expected_date = date_struct.format(DATE_FORMAT).to_string();
+        expected_date
     }
 
     #[test]
@@ -589,4 +671,68 @@ mod tests {
         let inadequate_length = 60; // less than reserved for extended attrs
         let contents = list_contents(&config, inadequate_length).unwrap();
     }
+
+    #[test]
+    fn contents_should_align_to_columns() {
+        let (temp_dir, file_1, _file_2) = setup_basic_test();
+        let config = Config {
+            target: temp_dir.path().to_str().unwrap().to_string(),
+            to_file: false,
+            target_file: "".to_string(),
+            extended_attributes: true,
+        };
+        let contents = list_contents(&config, 120).unwrap();
+        let lines: Vec<&str> = contents.split('\n').collect();
+        let title_line = lines[0];
+        let title_line_words: Vec<&str> = title_line.split("Date").collect();
+        let file_name = title_line_words[0];
+        let file_name_line = lines[2];
+        let file_name_line_words: Vec<&str> = file_name_line.split_ascii_whitespace().collect();
+        let file_name_path = file_name_line_words[1];
+        assert_eq!(file_name.len(), file_name_path.len() + 3) // for icon & extra space
+    }
+
+    #[test]
+    fn paths_should_pad_to_max_length() {
+        let long_file_name =
+            "very_long_filename_to_check_for_shortening_of_filename_on_small_consoles.txt";
+        let temp_dir = tempdir().unwrap();
+        let file_1 = temp_dir.path().join(long_file_name);
+        let file_2 = temp_dir.path().join(FILE_2_NAME);
+        File::create(&file_1).unwrap();
+        File::create(&file_2).unwrap();
+        assert!(file_1.as_path().exists());
+        assert!(file_2.as_path().exists());
+        let config = Config {
+            target: temp_dir.path().to_str().unwrap().to_string(),
+            to_file: false,
+            target_file: "".to_string(),
+            extended_attributes: true,
+        };
+        let file_1_full_path = file_1.to_str().unwrap().to_string();
+        let max_name_width = file_1_full_path.graphemes(true).count();
+        let always_sufficient_length = max_name_width + 70; //so always file path is smaller that console
+        let contents = list_contents(&config, always_sufficient_length).unwrap();
+        let contents_as_lines: Vec<&str> = contents.split('\n').collect();
+        let first_path_line = contents_as_lines
+            .iter()
+            .find(|line| line.contains("very_long_filename"))
+            .unwrap();
+        let second_path_line = contents_as_lines
+            .iter()
+            .find(|line| line.contains(FILE_2_NAME))
+            .unwrap();
+        println!("{}", first_path_line);
+        println!("{}", second_path_line);
+        assert_eq!(first_path_line.len(), second_path_line.len());
+        let expected_file_2_created = file_2.metadata().unwrap().created().unwrap();
+        let expected_date_str = calc_expected_date_string(&expected_file_2_created);
+        assert!(second_path_line.contains(expected_date_str.as_str()));
+        let file_2_parts: Vec<&str> = second_path_line.split(expected_date_str.as_str()).collect();
+        let file_1_parts: Vec<&str> = first_path_line.split(expected_date_str.as_str()).collect();
+        assert_eq!(FLOPPY_ICON.graphemes(true).count(), 1);
+        assert_eq!(file_2_parts[0].len(), file_1_parts[0].len());
+    }
+
+    // columns should auto-fit content
 }
