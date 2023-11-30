@@ -15,7 +15,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 const FLOPPY: &str = "\u{1F4BE}";
 const FOLDER: &str = "\u{1F4C1}";
-const RESERVED_LENGTH: usize = 63;
+const RESERVED_LENGTH: usize = 66;
 
 const DATE_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.3f";
 
@@ -173,9 +173,9 @@ fn generate_textual_display(
 fn create_extended_attr_header(width: usize, longest: usize) -> Vec<String> {
     let date_created_heading = create_heading_of_width(24usize, "Date Created");
     let date_modified_heading = create_heading_of_width(24usize, "Date Modified");
-    let permissions_heading = create_heading_of_width(12usize, "Permissions");
-    let remaining_width = if longest + 3 <= width - 60 {
-        longest + 3
+    let permissions_heading = create_heading_of_width(13usize, "Permissions");
+    let remaining_width = if longest + 4 <= width - 60 {
+        longest + 4
     } else {
         width - 60
     };
@@ -195,7 +195,7 @@ fn orchestrate_formatting(
     command: FormattingCommand,
 ) -> Result<Vec<String>, FileEntryParsingError> {
     Ok(if command.extended_attr && command.width > 80 {
-        let available_filename_space = command.width - 63;
+        let available_filename_space = command.width - RESERVED_LENGTH;
         let file_name_target_length = if available_filename_space > command.longest {
             command.longest
         } else {
@@ -210,8 +210,10 @@ fn orchestrate_formatting(
 }
 
 fn create_heading_of_width(head_width: usize, name: &str) -> String {
-    name.to_string()
-        .add(" ".repeat(head_width - name.len()).as_str())
+    name.to_string().add(
+        " ".repeat(head_width - name.graphemes(true).count())
+            .as_str(),
+    )
 }
 
 fn format_each_ext_attr_entry(
@@ -243,9 +245,9 @@ fn format_file_entry_with_ext_attr(
     };
     let date_created = get_formatted_date(&meta_data, Created);
     let permissions = if meta_data.permissions().readonly() {
-        "read only "
+        "read only   "
     } else {
-        "writable "
+        "writable    "
     };
     let date_modified = get_formatted_date(&meta_data, Modified);
     Ok([
@@ -496,7 +498,7 @@ mod tests {
             extended_attributes: true,
         };
         // Date Created and Date Modified = 24 each, rest Name
-        let expected_header = "Name                                    Date Created            Permissions Date Modified           ";
+        let expected_header = "Name                                    Date Created            Permissions  Date Modified           ";
         let contents = list_contents(&config, 100).unwrap();
         let lines_of_content: Vec<&str> = contents.split('\n').collect();
         let header = lines_of_content[0];
@@ -585,7 +587,7 @@ mod tests {
 
     #[test]
     fn does_not_contain_extended_attributes_when_not_set() {
-        let (temp_dir, file_1, _file_2) = setup_basic_test();
+        let (temp_dir, _file_1, _file_2) = setup_basic_test();
         let config = Config {
             target: temp_dir.path().to_str().unwrap().to_string(),
             to_file: false,
@@ -669,7 +671,7 @@ mod tests {
             extended_attributes: true,
         };
         let inadequate_length = 60; // less than reserved for extended attrs
-        let contents = list_contents(&config, inadequate_length).unwrap();
+        let _contents = list_contents(&config, inadequate_length).unwrap();
     }
 
     #[test]
@@ -681,15 +683,26 @@ mod tests {
             target_file: "".to_string(),
             extended_attributes: true,
         };
-        let contents = list_contents(&config, 120).unwrap();
+        let contents = list_contents(&config, 200).unwrap();
         let lines: Vec<&str> = contents.split('\n').collect();
         let title_line = lines[0];
         let title_line_words: Vec<&str> = title_line.split("Date").collect();
-        let file_name = title_line_words[0];
-        let file_name_line = lines[2];
-        let file_name_line_words: Vec<&str> = file_name_line.split_ascii_whitespace().collect();
-        let file_name_path = file_name_line_words[1];
-        assert_eq!(file_name.len(), file_name_path.len() + 3) // for icon & extra space
+        let file_name_header = title_line_words[0];
+        let file_name_line = lines
+            .into_iter()
+            .find(|line| line.contains("file_1"))
+            .unwrap();
+        let expected_file_1_created = file_1.metadata().unwrap().created().unwrap();
+        let expected_date_str = calc_expected_date_string(&expected_file_1_created);
+        let file_name_line_sections: Vec<&str> =
+            file_name_line.split(expected_date_str.as_str()).collect();
+        let file_name_column = file_name_line_sections[0];
+        println!("{}", file_name_header);
+        println!("{}", file_name_column);
+        assert_eq!(
+            file_name_header.graphemes(true).count(),
+            file_name_column.graphemes(true).count() + 1 // for extra space
+        )
     }
 
     #[test]
@@ -730,9 +743,9 @@ mod tests {
         assert!(second_path_line.contains(expected_date_str.as_str()));
         let file_2_parts: Vec<&str> = second_path_line.split(expected_date_str.as_str()).collect();
         let file_1_parts: Vec<&str> = first_path_line.split(expected_date_str.as_str()).collect();
-        assert_eq!(FLOPPY_ICON.graphemes(true).count(), 1);
-        assert_eq!(file_2_parts[0].len(), file_1_parts[0].len());
+        assert_eq!(
+            file_2_parts[0].graphemes(true).count(),
+            file_1_parts[0].graphemes(true).count()
+        );
     }
-
-    // columns should auto-fit content
 }
