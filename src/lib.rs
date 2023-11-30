@@ -1,9 +1,11 @@
 pub mod arg_processing;
+mod output_formatting;
 
 use crate::arg_processing::Config;
 use crate::FileEntryParsingError::UnableToCalculatePathLengths;
 use crate::TimeOptions::{Created, Modified};
 use chrono::{DateTime, Utc};
+use output_formatting::FormattingCommand;
 use std::fmt::Formatter;
 use std::fs::{DirEntry, Metadata, ReadDir};
 use std::io::ErrorKind;
@@ -78,24 +80,6 @@ impl From<FileEntryParsingError> for io::Error {
     }
 }
 
-struct FormattingCommand {
-    extended_attr: bool,
-    width: usize,
-    files: Vec<DirEntry>,
-    longest: usize,
-}
-
-impl FormattingCommand {
-    fn new(extended_attr: bool, width: usize, files: Vec<DirEntry>, longest: usize) -> Self {
-        FormattingCommand {
-            extended_attr,
-            width,
-            files,
-            longest,
-        }
-    }
-}
-
 fn list_contents(config: &Config, width: usize) -> Result<String, FileEntryParsingError> {
     let dir_read = fs::read_dir(&config.target);
     match dir_read {
@@ -124,7 +108,7 @@ fn convert_read_dir_to_filename_collection(
     let Some(longest) = analyse_longest(vec![&directories, &files]) else {
         return Err(UnableToCalculatePathLengths);
     };
-    generate_textual_display(
+    output_formatting::generate_textual_display(
         FormattingCommand::new(extended_attr, width, files, longest),
         directories,
     )
@@ -151,25 +135,6 @@ fn analyse_longest(entries: Vec<&Vec<DirEntry>>) -> Option<usize> {
         .max()
 }
 
-fn generate_textual_display(
-    command: FormattingCommand,
-    directories: Vec<DirEntry>,
-) -> Result<String, FileEntryParsingError> {
-    let mut header_row = if command.extended_attr && command.width > 80 {
-        create_extended_attr_header(command.width, command.longest)
-    } else {
-        vec![
-            String::from("Name:"),
-            String::from("=").repeat(command.width),
-        ]
-    };
-    let mut string_list_of_files = orchestrate_formatting(command)?;
-    let mut string_list_of_dirs = format_each_entry(directories, FOLDER)?;
-    header_row.append(&mut string_list_of_files);
-    header_row.append(&mut string_list_of_dirs);
-    Ok(header_row.join("\n"))
-}
-
 fn create_extended_attr_header(width: usize, longest: usize) -> Vec<String> {
     let date_created_heading = create_heading_of_width(24usize, "Date Created");
     let date_modified_heading = create_heading_of_width(24usize, "Date Modified");
@@ -189,24 +154,6 @@ fn create_extended_attr_header(width: usize, longest: usize) -> Vec<String> {
             + date_modified_heading.as_str(),
         String::from("=").repeat(width),
     ]
-}
-
-fn orchestrate_formatting(
-    command: FormattingCommand,
-) -> Result<Vec<String>, FileEntryParsingError> {
-    Ok(if command.extended_attr && command.width > 80 {
-        let available_filename_space = command.width - RESERVED_LENGTH;
-        let file_name_target_length = if available_filename_space > command.longest {
-            command.longest
-        } else {
-            available_filename_space
-        };
-        format_each_ext_attr_entry(&command.files, file_name_target_length)?
-    } else if command.extended_attr && command.width <= 80 {
-        panic!("requires minimum console width of 80");
-    } else {
-        format_each_entry(command.files, FLOPPY)?
-    })
 }
 
 fn create_heading_of_width(head_width: usize, name: &str) -> String {
@@ -739,10 +686,15 @@ mod tests {
         println!("{}", second_path_line);
         assert_eq!(first_path_line.len(), second_path_line.len());
         let expected_file_2_created = file_2.metadata().unwrap().created().unwrap();
-        let expected_date_str = calc_expected_date_string(&expected_file_2_created);
-        assert!(second_path_line.contains(expected_date_str.as_str()));
-        let file_2_parts: Vec<&str> = second_path_line.split(expected_date_str.as_str()).collect();
-        let file_1_parts: Vec<&str> = first_path_line.split(expected_date_str.as_str()).collect();
+        let expected_date_time_str = calc_expected_date_string(&expected_file_2_created);
+        let expected_date_components: Vec<&str> =
+            expected_date_time_str.split_whitespace().collect();
+        let expected_date_str = expected_date_components[0];
+        assert!(second_path_line.contains(expected_date_str));
+        let file_2_parts: Vec<&str> = second_path_line.split(expected_date_str).collect();
+        let file_1_parts: Vec<&str> = first_path_line.split(expected_date_str).collect();
+        println!("{}", file_2_parts[0]);
+        println!("{}", file_1_parts[0]);
         assert_eq!(
             file_2_parts[0].graphemes(true).count(),
             file_1_parts[0].graphemes(true).count()
