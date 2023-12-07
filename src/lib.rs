@@ -3,23 +3,14 @@ mod output_formatting;
 
 use crate::arg_processing::Config;
 use crate::FileEntryParsingError::UnableToCalculatePathLengths;
-use crate::TimeOptions::{Created, Modified};
-use chrono::{DateTime, Utc};
+
 use output_formatting::FormattingCommand;
 use std::fmt::Formatter;
-use std::fs::{DirEntry, Metadata, ReadDir};
+use std::fs::{DirEntry, ReadDir};
 use std::io::ErrorKind;
-use std::ops::Add;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, UNIX_EPOCH};
+
+use std::path::Path;
 use std::{fmt, fs, io};
-use unicode_segmentation::UnicodeSegmentation;
-
-const FLOPPY: &str = "\u{1F4BE}";
-const FOLDER: &str = "\u{1F4C1}";
-const RESERVED_LENGTH: usize = 66;
-
-const DATE_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.3f";
 
 #[derive(Debug, Clone)]
 pub enum FileEntryParsingError {
@@ -105,13 +96,12 @@ fn convert_read_dir_to_filename_collection(
 ) -> Result<String, FileEntryParsingError> {
     let (directories, files): (Vec<DirEntry>, Vec<DirEntry>) =
         split_into_files_and_dirs(file_collection);
-    let Some(longest) = analyse_longest(vec![&directories, &files]) else {
-        return Err(UnableToCalculatePathLengths);
-    };
-    output_formatting::generate_textual_display(
-        FormattingCommand::new(extended_attr, width, files, longest),
+    output_formatting::generate_textual_display(FormattingCommand::new(
+        extended_attr,
+        width,
+        files,
         directories,
-    )
+    ))
 }
 
 fn split_into_files_and_dirs(file_collection: ReadDir) -> (Vec<DirEntry>, Vec<DirEntry>) {
@@ -121,150 +111,7 @@ fn split_into_files_and_dirs(file_collection: ReadDir) -> (Vec<DirEntry>, Vec<Di
         .partition(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()))
 }
 
-fn analyse_longest(entries: Vec<&Vec<DirEntry>>) -> Option<usize> {
-    let full_list: Vec<&DirEntry> = entries.iter().flat_map(|vector| vector.iter()).collect();
-    full_list
-        .into_iter()
-        .map(|dir_entry: &DirEntry| dir_entry.path())
-        .map(|path: PathBuf| {
-            let path_as_str_option = path.to_str();
-            let path_as_str = path_as_str_option.unwrap_or("");
-            String::from(path_as_str)
-        })
-        .map(|stringy| stringy.len())
-        .max()
-}
-
-fn create_extended_attr_header(width: usize, longest: usize) -> Vec<String> {
-    let date_created_heading = create_heading_of_width(24usize, "Date Created");
-    let date_modified_heading = create_heading_of_width(24usize, "Date Modified");
-    let permissions_heading = create_heading_of_width(13usize, "Permissions");
-    let remaining_width = if longest + 4 <= width - 60 {
-        longest + 4
-    } else {
-        width - 60
-    };
-    let name_heading = create_heading_of_width(remaining_width, "Name");
-    let header = "".to_string();
-    vec![
-        header
-            + name_heading.as_str()
-            + date_created_heading.as_str()
-            + permissions_heading.as_str()
-            + date_modified_heading.as_str(),
-        String::from("=").repeat(width),
-    ]
-}
-
-fn create_heading_of_width(head_width: usize, name: &str) -> String {
-    name.to_string().add(
-        " ".repeat(head_width - name.graphemes(true).count())
-            .as_str(),
-    )
-}
-
-fn format_each_ext_attr_entry(
-    files: &[DirEntry],
-    max_file_name_width: usize,
-) -> Result<Vec<String>, FileEntryParsingError> {
-    files
-        .iter()
-        .map(|dir| format_file_entry_with_ext_attr(dir, max_file_name_width))
-        .collect()
-}
-
-fn format_file_entry_with_ext_attr(
-    dir: &DirEntry,
-    allowed_width: usize,
-) -> Result<String, FileEntryParsingError> {
-    let file_name_as_path = dir.path();
-    let file_name = match file_name_as_path.to_str() {
-        Some(file_name) => set_file_name_length(allowed_width, file_name),
-        None => return Err(FileEntryParsingError::FileNameInvalidUnicode),
-    };
-    let meta_data = match dir.metadata() {
-        Ok(meta) => meta,
-        Err(error) => {
-            return Err(FileEntryParsingError::MissingMetaDataError {
-                original_error: error.kind(),
-            })
-        }
-    };
-    let date_created = get_formatted_date(&meta_data, Created);
-    let permissions = if meta_data.permissions().readonly() {
-        "read only   "
-    } else {
-        "writable    "
-    };
-    let date_modified = get_formatted_date(&meta_data, Modified);
-    Ok([
-        FLOPPY,
-        file_name.as_str(),
-        &date_created,
-        permissions,
-        &date_modified,
-    ]
-    .join(" "))
-}
-
-fn set_file_name_length(allowed_width: usize, file_name: &str) -> String {
-    if file_name.graphemes(true).count() >= allowed_width {
-        let file_name_strs = file_name
-            .graphemes(true)
-            .take(allowed_width)
-            .collect::<Vec<&str>>();
-        file_name_strs.join("")
-    } else {
-        let spacer_length = allowed_width - file_name.len();
-        let spacer = " ".repeat(spacer_length);
-        file_name.to_string() + spacer.as_str()
-    }
-}
-
-fn get_formatted_date(meta_data: &Metadata, options: TimeOptions) -> String {
-    let since_epoch = match options {
-        Created => meta_data
-            .created()
-            .expect(
-                "Not anticipated to run on systems that do not implement date created for files",
-            )
-            .duration_since(UNIX_EPOCH)
-            .expect("Clock may have gone backwards"),
-        TimeOptions::Modified => meta_data
-            .modified()
-            .expect(
-                "Not anticipated to run on systems that do not implement date modified for files",
-            )
-            .duration_since(UNIX_EPOCH)
-            .expect("Clock may have gone backwards"),
-    };
-    format_date(since_epoch)
-}
-
-fn format_date(since_epoch: Duration) -> String {
-    DateTime::<Utc>::from_timestamp(
-        since_epoch.as_secs() as i64,
-        since_epoch.subsec_nanos(),
-    )
-      .expect(
-          "An invalid timestamp was provided, given this is from the system this should not happen",
-      )
-      .format(DATE_FORMAT)
-      .to_string()
-}
-
-fn format_each_entry(
-    dir_entries: Vec<DirEntry>,
-    icon: &str,
-) -> Result<Vec<String>, FileEntryParsingError> {
-    Ok(dir_entries
-        .into_iter()
-        .filter_map(|entry| convert_dir_entry_to_str(entry).ok())
-        .map(|file_name| icon.to_owned() + " " + &file_name)
-        .collect())
-}
-
-fn convert_dir_entry_to_str(dir_entry: DirEntry) -> Result<String, FileEntryParsingError> {
+fn convert_dir_entry_to_str(dir_entry: &DirEntry) -> Result<String, FileEntryParsingError> {
     let file_name = dir_entry.file_name();
     let normal_str = match file_name.to_str() {
         Some(name) => name,
@@ -292,6 +139,7 @@ pub fn manage_output(config: Config) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::output_formatting::{DATE_FORMAT, RESERVED_LENGTH};
     use chrono::{DateTime, Utc};
     use std::fs::File;
     use std::io::Write;
@@ -399,16 +247,6 @@ mod tests {
         };
         let contents = list_contents(&config, 100);
         assert!(contents.is_err());
-    }
-
-    #[test]
-    fn output_contains_header_row() {
-        let (config, _temp_dir) = get_typical_config(None);
-        let contents = list_contents(&config, 100).unwrap();
-        assert!(contents.starts_with("Name"));
-        assert!(!contents.contains("Date Created"));
-        assert!(!contents.contains("Date Modified"));
-        assert!(!contents.contains("Permissions"));
     }
 
     #[test]
