@@ -111,15 +111,6 @@ fn split_into_files_and_dirs(file_collection: ReadDir) -> (Vec<DirEntry>, Vec<Di
         .partition(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()))
 }
 
-fn convert_dir_entry_to_str(dir_entry: &DirEntry) -> Result<String, FileEntryParsingError> {
-    let file_name = dir_entry.file_name();
-    let normal_str = match file_name.to_str() {
-        Some(name) => name,
-        None => return Err(FileEntryParsingError::FileNameInvalidUnicode),
-    };
-    Ok(String::from(normal_str))
-}
-
 pub fn manage_output(config: Config) -> std::io::Result<()> {
     let width = if !config.to_file {
         term_size::dimensions()
@@ -151,7 +142,6 @@ mod tests {
     const FILE_1_NAME: &str = "file_1.txt";
     const FILE_2_NAME: &str = "file_2.txt";
     const FLOPPY_ICON: &str = "\u{1F4BE}";
-    const FOLDER_ICON: &str = "\u{1F4C1}";
 
     fn setup_basic_test() -> (TempDir, File, File) {
         let temp_dir = tempdir().unwrap();
@@ -197,24 +187,6 @@ mod tests {
                 .filter(|line| line.starts_with(FLOPPY_ICON))
                 .count(),
             2
-        );
-    }
-
-    #[test]
-    fn includes_folder_icon_for_sub_folders() {
-        let (temp_dir, ..) = setup_basic_test();
-        let folder_2 = temp_dir.path().join("sub_folder");
-        fs::create_dir(folder_2.as_path()).unwrap();
-        assert!(folder_2.exists());
-        let (config, _temp_dir) = get_typical_config(Some(temp_dir));
-        let list_of_contents = list_contents(&config, 100);
-        assert_eq!(
-            list_of_contents
-                .unwrap()
-                .lines()
-                .filter(|line| line.starts_with(FOLDER_ICON))
-                .count(),
-            1
         );
     }
 

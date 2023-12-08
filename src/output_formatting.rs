@@ -9,6 +9,11 @@ use std::rc::Rc;
 use std::time::{Duration, UNIX_EPOCH};
 use unicode_segmentation::UnicodeSegmentation;
 
+pub const FLOPPY: &str = "\u{1F4BE}";
+const FOLDER: &str = "\u{1F4C1}";
+pub const RESERVED_LENGTH: usize = 66;
+pub const DATE_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.3f";
+
 pub struct FormattingCommand {
     extended_attr: bool,
     width: usize,
@@ -55,30 +60,20 @@ pub fn generate_textual_display(
     Ok(header_row.join("\n"))
 }
 
-fn orchestrate_formatting(
-    command: &FormattingCommand,
-    longest: usize,
-) -> Result<Vec<String>, FileEntryParsingError> {
-    Ok(if command.extended_attr && command.width > 80 {
-        let available_filename_space = command.width - RESERVED_LENGTH;
-        let file_name_target_length = if available_filename_space > longest {
-            longest
-        } else {
-            available_filename_space
-        };
-        format_each_ext_attr_entry(&command.files, file_name_target_length)?
-    } else if command.extended_attr && command.width <= 80 {
-        panic!("requires minimum console width of 80");
-    } else {
-        format_each_entry(&command.files, FLOPPY)?
-    })
+fn analyse_longest(command: &FormattingCommand) -> Option<usize> {
+    let joined = [&command.files, &command.directories];
+    let full_list: Vec<&DirEntry> = joined.iter().flat_map(|vec| vec.iter()).collect();
+    full_list
+        .into_iter()
+        .map(|dir_entry: &DirEntry| dir_entry.path())
+        .map(|path: PathBuf| {
+            let path_as_str_option = path.to_str();
+            let path_as_str = path_as_str_option.unwrap_or("");
+            String::from(path_as_str)
+        })
+        .map(|stringy| stringy.len())
+        .max()
 }
-
-pub const FLOPPY: &str = "\u{1F4BE}";
-const FOLDER: &str = "\u{1F4C1}";
-pub const RESERVED_LENGTH: usize = 66;
-
-pub const DATE_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.3f";
 
 fn create_extended_attr_header(width: usize, longest: usize) -> Vec<String> {
     let date_created_heading = create_heading_of_width(24usize, "Date Created");
@@ -106,6 +101,25 @@ fn create_heading_of_width(head_width: usize, name: &str) -> String {
         " ".repeat(head_width - name.graphemes(true).count())
             .as_str(),
     )
+}
+
+fn orchestrate_formatting(
+    command: &FormattingCommand,
+    longest: usize,
+) -> Result<Vec<String>, FileEntryParsingError> {
+    Ok(if command.extended_attr && command.width > 80 {
+        let available_filename_space = command.width - RESERVED_LENGTH;
+        let file_name_target_length = if available_filename_space > longest {
+            longest
+        } else {
+            available_filename_space
+        };
+        format_each_ext_attr_entry(&command.files, file_name_target_length)?
+    } else if command.extended_attr && command.width <= 80 {
+        panic!("requires minimum console width of 80");
+    } else {
+        format_each_entry(&command.files, FLOPPY)?
+    })
 }
 
 fn format_each_ext_attr_entry(
@@ -204,29 +218,23 @@ fn format_each_entry(
 ) -> Result<Vec<String>, FileEntryParsingError> {
     Ok(dir_entries
         .iter()
-        .filter_map(|entry| crate::convert_dir_entry_to_str(entry).ok())
+        .filter_map(|entry| convert_dir_entry_to_str(entry).ok())
         .map(|file_name| icon.to_owned() + " " + &file_name)
         .collect())
 }
 
-fn analyse_longest(command: &FormattingCommand) -> Option<usize> {
-    let joined = [&command.files, &command.directories];
-    let full_list: Vec<&DirEntry> = joined.iter().flat_map(|vec| vec.iter()).collect();
-    full_list
-        .into_iter()
-        .map(|dir_entry: &DirEntry| dir_entry.path())
-        .map(|path: PathBuf| {
-            let path_as_str_option = path.to_str();
-            let path_as_str = path_as_str_option.unwrap_or("");
-            String::from(path_as_str)
-        })
-        .map(|stringy| stringy.len())
-        .max()
+fn convert_dir_entry_to_str(dir_entry: &DirEntry) -> Result<String, FileEntryParsingError> {
+    let file_name = dir_entry.file_name();
+    let normal_str = match file_name.to_str() {
+        Some(name) => name,
+        None => return Err(FileEntryParsingError::FileNameInvalidUnicode),
+    };
+    Ok(String::from(normal_str))
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::output_formatting::{generate_textual_display, FormattingCommand};
+    use crate::output_formatting::{generate_textual_display, FormattingCommand, FOLDER};
     use std::fs;
     use std::fs::{DirEntry, File};
     use tempfile::tempdir;
@@ -260,5 +268,19 @@ mod tests {
         assert!(!header_row.contains("Date Created"));
         assert!(!header_row.contains("Date Modified"));
         assert!(!header_row.contains("Permissions"));
+    }
+
+    #[test]
+    fn includes_folder_icon_for_sub_folders() {
+        let (file_entries, directories) = setup_test();
+        let command = FormattingCommand::new(false, 100, file_entries, directories);
+        let content = generate_textual_display(command).unwrap();
+        assert_eq!(
+            content
+                .lines()
+                .filter(|line| line.starts_with(FOLDER))
+                .count(),
+            1
+        );
     }
 }
