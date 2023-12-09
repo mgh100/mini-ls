@@ -222,30 +222,6 @@ mod tests {
     }
 
     #[test]
-    fn contains_seperator_row() {
-        let (config, _temp_dir) = get_typical_config(None);
-        let contents = list_contents(&config, 100).unwrap();
-        let expected_row = "=".repeat(100);
-        assert!(contents.contains(&expected_row));
-    }
-
-    #[test]
-    fn contains_a_header_for_extra_attributes_when_configured() {
-        let (temp_dir, ..) = setup_basic_test();
-        let config = Config {
-            target: temp_dir.path().to_str().unwrap().to_string(),
-            to_file: false,
-            target_file: "".to_string(),
-            extended_attributes: true,
-        };
-        let contents = list_contents(&config, 100).unwrap();
-        assert!(contents.starts_with("Name"));
-        assert!(contents.contains("Date Created"));
-        assert!(contents.contains("Date Modified"));
-        assert!(contents.contains("Permissions"));
-    }
-
-    #[test]
     fn spaces_out_columns() {
         let (temp_dir, ..) = setup_basic_test();
         let config = Config {
@@ -282,7 +258,7 @@ mod tests {
         assert!(contents.contains(expected_date.as_str()));
     }
 
-    fn calc_expected_date_string(expected_file_1_created: &SystemTime) -> String {
+    pub(crate) fn calc_expected_date_string(expected_file_1_created: &SystemTime) -> String {
         let date_as_time_since_epoch = expected_file_1_created
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap();
@@ -328,88 +304,6 @@ mod tests {
     }
 
     #[test]
-    fn does_not_contain_ext_attrs_headers_when_not_set() {
-        let (temp_dir, _file_1, _file_2) = setup_basic_test();
-        let config = Config {
-            target: temp_dir.path().to_str().unwrap().to_string(),
-            to_file: false,
-            target_file: "".to_string(),
-            extended_attributes: false,
-        };
-        let contents = list_contents(&config, 400).unwrap();
-        assert!(!contents.contains("Date Created"));
-        assert!(!contents.contains("Date Modified"));
-        assert!(!contents.contains("Permissions"));
-    }
-
-    #[test]
-    fn does_not_contain_extended_attributes_when_not_set() {
-        let (temp_dir, _file_1, _file_2) = setup_basic_test();
-        let config = Config {
-            target: temp_dir.path().to_str().unwrap().to_string(),
-            to_file: false,
-            target_file: "".to_string(),
-            extended_attributes: false,
-        };
-        let contents = list_contents(&config, 400).unwrap();
-        let lines_of_content: Vec<&str> = contents.split('\n').collect();
-        let first_file_line = lines_of_content.get(2).unwrap();
-        let components: Vec<&str> = first_file_line.split_ascii_whitespace().collect();
-        assert_eq!(2, components.len());
-    }
-
-    #[test]
-    fn file_names_shortened_for_small_terminals_when_ext_attr_set() {
-        let (file_1_full_path, compressed_width, target_line) = setup_long_name_test();
-        assert_eq!(target_line.len(), compressed_width);
-        assert!(!target_line.contains(file_1_full_path.as_str()));
-        let expected_content_chars: Vec<&str> = file_1_full_path
-            .graphemes(true)
-            .take(compressed_width - RESERVED_LENGTH)
-            .collect();
-        let expected_content = expected_content_chars.join("");
-        assert!(target_line.contains(&expected_content));
-    }
-
-    fn setup_long_name_test() -> (String, usize, String) {
-        let long_file_name =
-            "very_long_filename_to_check_for_shortening_of_filename_on_small_consoles.txt";
-        let temp_dir = tempdir().unwrap();
-        let file_1 = temp_dir.path().join(long_file_name);
-        let file_2 = temp_dir.path().join(FILE_2_NAME);
-        File::create(&file_1).unwrap();
-        File::create(&file_2).unwrap();
-        assert!(file_1.as_path().exists());
-        assert!(file_2.as_path().exists());
-        let config = Config {
-            target: temp_dir.path().to_str().unwrap().to_string(),
-            to_file: false,
-            target_file: "".to_string(),
-            extended_attributes: true,
-        };
-        let file_1_full_path = file_1.to_str().unwrap().to_string();
-        let compressed_width = file_1_full_path.graphemes(true).count(); //so always file path is smaller that console
-        let contents = list_contents(&config, compressed_width).unwrap();
-        let lines_of_content: Vec<&str> = contents.split('\n').collect();
-        let first_file_line = lines_of_content.get(2).unwrap();
-        let second_file_line = lines_of_content.get(3).unwrap();
-        let target_line = if first_file_line.contains("very_long") {
-            first_file_line
-        } else {
-            second_file_line
-        };
-        (file_1_full_path, compressed_width, target_line.to_string())
-    }
-
-    #[test]
-    fn there_is_always_space_between_fields() {
-        let (_file_1_full_path, _compressed_width, target_line) = setup_long_name_test();
-        let n_space_sep_components = target_line.split_ascii_whitespace().count();
-        // space between icon and name, name and datec, datec and timec, timec and perm, perm and datem, datem and timem
-        assert_eq!(n_space_sep_components, 7);
-    }
-
-    #[test]
     #[should_panic(expected = "requires minimum console width of 80")]
     fn returns_err_on_too_narrow_terminals() {
         let long_file_name =
@@ -429,85 +323,5 @@ mod tests {
         };
         let inadequate_length = 60; // less than reserved for extended attrs
         let _contents = list_contents(&config, inadequate_length).unwrap();
-    }
-
-    #[test]
-    fn contents_should_align_to_columns() {
-        let (temp_dir, file_1, _file_2) = setup_basic_test();
-        let config = Config {
-            target: temp_dir.path().to_str().unwrap().to_string(),
-            to_file: false,
-            target_file: "".to_string(),
-            extended_attributes: true,
-        };
-        let contents = list_contents(&config, 200).unwrap();
-        let lines: Vec<&str> = contents.split('\n').collect();
-        let title_line = lines[0];
-        let title_line_words: Vec<&str> = title_line.split("Date").collect();
-        let file_name_header = title_line_words[0];
-        let file_name_line = lines
-            .into_iter()
-            .find(|line| line.contains("file_1"))
-            .unwrap();
-        let expected_file_1_created = file_1.metadata().unwrap().created().unwrap();
-        let expected_date_str = calc_expected_date_string(&expected_file_1_created);
-        let file_name_line_sections: Vec<&str> =
-            file_name_line.split(expected_date_str.as_str()).collect();
-        let file_name_column = file_name_line_sections[0];
-        println!("{}", file_name_header);
-        println!("{}", file_name_column);
-        assert_eq!(
-            file_name_header.graphemes(true).count(),
-            file_name_column.graphemes(true).count() + 1 // for extra space
-        )
-    }
-
-    #[test]
-    fn paths_should_pad_to_max_length() {
-        let long_file_name =
-            "very_long_filename_to_check_for_shortening_of_filename_on_small_consoles.txt";
-        let temp_dir = tempdir().unwrap();
-        let file_1 = temp_dir.path().join(long_file_name);
-        let file_2 = temp_dir.path().join(FILE_2_NAME);
-        File::create(&file_1).unwrap();
-        File::create(&file_2).unwrap();
-        assert!(file_1.as_path().exists());
-        assert!(file_2.as_path().exists());
-        let config = Config {
-            target: temp_dir.path().to_str().unwrap().to_string(),
-            to_file: false,
-            target_file: "".to_string(),
-            extended_attributes: true,
-        };
-        let file_1_full_path = file_1.to_str().unwrap().to_string();
-        let max_name_width = file_1_full_path.graphemes(true).count();
-        let always_sufficient_length = max_name_width + 70; //so always file path is smaller that console
-        let contents = list_contents(&config, always_sufficient_length).unwrap();
-        let contents_as_lines: Vec<&str> = contents.split('\n').collect();
-        let first_path_line = contents_as_lines
-            .iter()
-            .find(|line| line.contains("very_long_filename"))
-            .unwrap();
-        let second_path_line = contents_as_lines
-            .iter()
-            .find(|line| line.contains(FILE_2_NAME))
-            .unwrap();
-        println!("{}", first_path_line);
-        println!("{}", second_path_line);
-        assert_eq!(first_path_line.len(), second_path_line.len());
-        let expected_file_2_created = file_2.metadata().unwrap().created().unwrap();
-        let expected_date_time_str = calc_expected_date_string(&expected_file_2_created);
-        let expected_date_components: Vec<&str> =
-            expected_date_time_str.split_whitespace().collect();
-        let expected_date_str = expected_date_components[0];
-        assert!(second_path_line.contains(expected_date_str));
-        let file_2_parts: Vec<&str> = second_path_line.split(expected_date_str).collect();
-        let file_1_parts: Vec<&str> = first_path_line.split(expected_date_str).collect();
-        println!("{}", file_2_parts[0]);
-        println!("{}", file_1_parts[0]);
-        assert_eq!(
-            file_2_parts[0].graphemes(true).count(),
-            file_1_parts[0].graphemes(true).count()
-        );
     }
 }
