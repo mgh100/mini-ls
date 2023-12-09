@@ -237,6 +237,7 @@ mod tests {
     use crate::tests::calc_expected_date_string;
     use std::fs;
     use std::fs::{DirEntry, File};
+    use std::path::PathBuf;
     use tempfile::{tempdir, TempDir};
     use unicode_segmentation::UnicodeSegmentation;
 
@@ -344,13 +345,7 @@ mod tests {
             "very_long_filename_to_check_for_shortening_of_filename_on_small_consoles.txt";
         let temp_dir = tempdir().unwrap();
         let file_1 = temp_dir.path().join(FILE_1_NAME);
-        let long_file_name = if file_1.to_str().unwrap().len() < 80 {
-            let missing_graphmes = 80 - file_1.to_str().unwrap().len();
-            let suffix = "0".repeat(missing_graphmes);
-            suffix + long_file_name
-        } else {
-            long_file_name.to_string()
-        };
+        let long_file_name = validate_file_length(long_file_name, &file_1);
         let file_2 = temp_dir.path().join(long_file_name);
         let extra_dir = temp_dir.path().join("other");
         File::create(&file_1).unwrap();
@@ -362,7 +357,6 @@ mod tests {
             .partition(|entry| entry.metadata().unwrap().is_file());
         let file_2_full_path = file_2.to_str().unwrap().to_string();
         let compressed_width = file_2_full_path.graphemes(true).count(); //so always file path is smaller that console
-
         (
             temp_dir,
             file_2_full_path,
@@ -370,6 +364,17 @@ mod tests {
             files,
             directories,
         )
+    }
+
+    fn validate_file_length(long_file_name: &str, file_1: &PathBuf) -> String {
+        let long_file_name = if file_1.to_str().unwrap().len() < 80 {
+            let missing_graphmes = 80 - file_1.to_str().unwrap().len();
+            let suffix = "0".repeat(missing_graphmes);
+            suffix + long_file_name
+        } else {
+            long_file_name.to_string()
+        };
+        long_file_name
     }
 
     #[test]
@@ -433,13 +438,7 @@ mod tests {
             "very_long_filename_to_check_for_shortening_of_filename_on_small_consoles.txt";
         let temp_dir = tempdir().unwrap();
         let file_1 = temp_dir.path().join(FILE_1_NAME);
-        let long_file_name = if file_1.to_str().unwrap().len() < 80 {
-            let missing_graphmes = 80 - file_1.to_str().unwrap().len();
-            let suffix = "0".repeat(missing_graphmes);
-            suffix + long_file_name
-        } else {
-            long_file_name.to_string()
-        };
+        let long_file_name = validate_file_length(long_file_name, &file_1);
         let file_2 = temp_dir.path().join(long_file_name);
         let extra_dir = temp_dir.path().join("other");
         File::create(&file_1).unwrap();
@@ -486,13 +485,7 @@ mod tests {
             "very_long_filename_to_check_for_shortening_of_filename_on_small_consoles.txt";
         let temp_dir = tempdir().unwrap();
         let file_1 = temp_dir.path().join(FILE_1_NAME);
-        let long_file_name = if file_1.to_str().unwrap().len() < 80 {
-            let missing_graphmes = 80 - file_1.to_str().unwrap().len();
-            let suffix = "0".repeat(missing_graphmes);
-            suffix + long_file_name
-        } else {
-            long_file_name.to_string()
-        };
+        let long_file_name = validate_file_length(long_file_name, &file_1);
         let file_2 = temp_dir.path().join(long_file_name);
         let extra_dir = temp_dir.path().join("other");
         File::create(&file_1).unwrap();
