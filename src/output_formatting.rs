@@ -68,7 +68,7 @@ fn analyse_longest(command: &FormattingCommand) -> Option<usize> {
             let path_as_str = path_as_str_option.unwrap_or("");
             String::from(path_as_str)
         })
-        .map(|stringy| stringy.len())
+        .map(|stringy| stringy.graphemes(true).count())
         .max()
 }
 
