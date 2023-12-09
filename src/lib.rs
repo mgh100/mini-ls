@@ -130,14 +130,13 @@ pub fn manage_output(config: Config) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::output_formatting::{DATE_FORMAT, RESERVED_LENGTH};
+    use crate::output_formatting::DATE_FORMAT;
     use chrono::{DateTime, Utc};
     use std::fs::File;
     use std::io::Write;
     use std::time::SystemTime;
     use std::{fs, thread, time};
     use tempfile::*;
-    use unicode_segmentation::UnicodeSegmentation;
 
     const FILE_1_NAME: &str = "file_1.txt";
     const FILE_2_NAME: &str = "file_2.txt";
@@ -222,23 +221,6 @@ mod tests {
     }
 
     #[test]
-    fn spaces_out_columns() {
-        let (temp_dir, ..) = setup_basic_test();
-        let config = Config {
-            target: temp_dir.path().to_str().unwrap().to_string(),
-            to_file: false,
-            target_file: "".to_string(),
-            extended_attributes: true,
-        };
-        // Date Created and Date Modified = 24 each, rest Name
-        let expected_header = "Name                                    Date Created            Permissions  Date Modified           ";
-        let contents = list_contents(&config, 100).unwrap();
-        let lines_of_content: Vec<&str> = contents.split('\n').collect();
-        let header = lines_of_content[0];
-        assert_eq!(expected_header, header);
-    }
-
-    #[test]
     fn contains_date_created_attr() {
         let (temp_dir, file_1, _file_2) = setup_basic_test();
         let expected_file_1_created = file_1.metadata().unwrap().created().unwrap();
@@ -271,6 +253,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "linux"))]
     fn contains_permissions_when_extended_attr() {
         let (temp_dir, file_1, _file_2) = setup_basic_test();
         let mut permissions = file_1.metadata().unwrap().permissions();

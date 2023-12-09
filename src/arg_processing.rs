@@ -274,6 +274,7 @@ fn parse_extended_attribute_flag(flags: &[Argument]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::Config;
+    use std::env::temp_dir;
 
     #[test]
     fn obtains_the_dir_from_args() {
@@ -308,10 +309,13 @@ mod tests {
 
     #[test]
     fn returns_an_error_if_missing_file_for_output_with_f_flag() {
+        let temp_dir = temp_dir();
+        let temp_dir_path = temp_dir.to_path_buf();
+        let temp_path = temp_dir_path.to_str().unwrap();
         let args = vec![
             String::from("./mini-ls"),
             String::from("-F"),
-            String::from("~/dev"),
+            String::from(temp_path),
         ];
         let config = Config::build(args);
         assert!(config.is_err());

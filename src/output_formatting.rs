@@ -231,8 +231,6 @@ fn convert_dir_entry_to_str(dir_entry: &DirEntry) -> Result<String, FileEntryPar
 
 #[cfg(test)]
 mod tests {
-    use crate::arg_processing::Config;
-    use crate::list_contents;
     use crate::output_formatting::{
         generate_textual_display, FormattingCommand, FOLDER, RESERVED_LENGTH,
     };
@@ -452,7 +450,6 @@ mod tests {
             .filter_map(|entry| entry.ok())
             .partition(|entry| entry.metadata().unwrap().is_file());
         let file_2_full_path = file_2.to_str().unwrap().to_string();
-        let compressed_width = file_2_full_path.graphemes(true).count(); //so always file path is smaller that console
         let max_name_width = file_2_full_path.graphemes(true).count();
         let always_sufficient_length = max_name_width + 70; //so always file path is smaller that console
         let command = FormattingCommand::new(true, always_sufficient_length, files, directories);
@@ -480,5 +477,17 @@ mod tests {
             file_2_parts[0].graphemes(true).count(),
             file_1_parts[0].graphemes(true).count()
         );
+    }
+
+    #[test]
+    fn spaces_out_columns() {
+        let (_tempdir, file_entries, directories) = setup_test();
+        let command = FormattingCommand::new(true, 100, file_entries, directories);
+        let contents = generate_textual_display(command).unwrap();
+        // Date Created and Date Modified = 24 each, rest Name
+        let expected_header = "Name                                    Date Created            Permissions  Date Modified           ";
+        let lines_of_content: Vec<&str> = contents.split('\n').collect();
+        let header = lines_of_content[0];
+        assert_eq!(expected_header, header);
     }
 }
