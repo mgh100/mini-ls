@@ -5,7 +5,6 @@ use chrono::{DateTime, Utc};
 use std::fs::{DirEntry, Metadata};
 use std::ops::Add;
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::time::{Duration, UNIX_EPOCH};
 use unicode_segmentation::UnicodeSegmentation;
 
