@@ -481,8 +481,28 @@ mod tests {
 
     #[test]
     fn spaces_out_columns() {
-        let (_tempdir, file_entries, directories) = setup_test();
-        let command = FormattingCommand::new(true, 100, file_entries, directories);
+        // let (_tempdir, file_entries, directories) = setup_test();
+        let long_file_name =
+            "very_long_filename_to_check_for_shortening_of_filename_on_small_consoles.txt";
+        let temp_dir = tempdir().unwrap();
+        let file_1 = temp_dir.path().join(FILE_1_NAME);
+        let long_file_name = if file_1.to_str().unwrap().len() < 80 {
+            let missing_graphmes = 80 - file_1.to_str().unwrap().len();
+            let suffix = "0".repeat(missing_graphmes);
+            suffix + long_file_name
+        } else {
+            long_file_name.to_string()
+        };
+        let file_2 = temp_dir.path().join(long_file_name);
+        let extra_dir = temp_dir.path().join("other");
+        File::create(&file_1).unwrap();
+        File::create(&file_2).unwrap();
+        fs::create_dir(&extra_dir).unwrap();
+        let dir_read = fs::read_dir(temp_dir.path()).unwrap();
+        let (files, directories) = dir_read
+            .filter_map(|entry| entry.ok())
+            .partition(|entry| entry.metadata().unwrap().is_file());
+        let command = FormattingCommand::new(true, 100, files, directories);
         let contents = generate_textual_display(command).unwrap();
         // Date Created and Date Modified = 24 each, rest Name
         let expected_header = "Name                                    Date Created            Permissions  Date Modified           ";
