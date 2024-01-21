@@ -198,6 +198,7 @@ mod tests {
             to_file: true,
             target_file: file_1.to_str().unwrap().to_string(),
             extended_attributes: false,
+            recurse: false,
         };
         manage_output(config).unwrap();
         assert!(file_1.exists());
@@ -215,6 +216,7 @@ mod tests {
             to_file: false,
             target_file: "".to_string(),
             extended_attributes: false,
+            recurse: false,
         };
         let contents = list_contents(&config, 100);
         assert!(contents.is_err());
@@ -235,6 +237,7 @@ mod tests {
             to_file: false,
             target_file: "".to_string(),
             extended_attributes: true,
+            recurse: false,
         };
         let contents = list_contents(&config, 400).unwrap();
         assert!(contents.contains(expected_date.as_str()));
@@ -265,6 +268,7 @@ mod tests {
             to_file: false,
             target_file: "".to_string(),
             extended_attributes: true,
+            recurse: false,
         };
         let contents = list_contents(&config, 400).unwrap();
         let lines: Vec<&str> = contents.split('\n').collect();
@@ -303,6 +307,7 @@ mod tests {
             to_file: false,
             target_file: "".to_string(),
             extended_attributes: true,
+            recurse: false,
         };
         let inadequate_length = 60; // less than reserved for extended attrs
         let _contents = list_contents(&config, inadequate_length).unwrap();

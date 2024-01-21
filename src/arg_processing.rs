@@ -5,11 +5,13 @@ use std::path::Path;
 
 const F_FLAG: &str = "F";
 const L_FLAG: &str = "l";
+const R_FLAG: &str = "r";
 
 #[derive(PartialEq, Eq)]
 enum AllowedFlags {
     F,
     L,
+    R,
 }
 
 impl AllowedFlags {
@@ -53,6 +55,7 @@ pub struct Config {
     pub to_file: bool,
     pub target_file: String,
     pub(crate) extended_attributes: bool,
+    pub(crate) recurse: bool,
 }
 
 impl Config {
@@ -63,7 +66,8 @@ impl Config {
             Err(error) => return Err(error),
         };
         let (to_file, target_file) = parse_file_output_args(&flags)?;
-        let extended_attributes = parse_extended_attribute_flag(&flags);
+        let recurse = extract_bool_flag_of(&flags, AllowedFlags::R);
+        let extended_attributes = extract_bool_flag_of(&flags, AllowedFlags::L);
         let target = flags
             .iter()
             .find(|flag| matches!(flag, Argument::TargetDir { .. }));
@@ -76,6 +80,7 @@ impl Config {
             to_file,
             target_file,
             extended_attributes,
+            recurse,
         })
     }
 }
@@ -131,6 +136,10 @@ fn extract_single_no_concat_switch(string: &str) -> Result<Argument, ArgParsingE
         }),
         L_FLAG => Ok(Argument::Flag {
             switch: AllowedFlags::L,
+            flag_option_text: None,
+        }),
+        R_FLAG => Ok(Argument::Flag {
+            switch: AllowedFlags::R,
             flag_option_text: None,
         }),
         argument => Err(ArgParsingError::UnexpectedArgument {
@@ -264,9 +273,9 @@ fn convert_from_short_unix_home(file_path: &str) -> Result<String, ArgParsingErr
     }
 }
 
-fn parse_extended_attribute_flag(flags: &[Argument]) -> bool {
+fn extract_bool_flag_of(flags: &[Argument], target_flag: AllowedFlags) -> bool {
     flags.iter().any(|flag| match flag {
-        Argument::Flag { switch, .. } => *switch == AllowedFlags::L,
+        Argument::Flag { switch, .. } => *switch == target_flag,
         _ => false,
     })
 }
@@ -419,6 +428,18 @@ mod tests {
         assert!(config.to_file);
         assert!(config.extended_attributes);
         assert_eq!(config.target_file, "log.txt");
+        assert_eq!(config.target, "/opt/dev");
+    }
+
+    #[test]
+    fn find_the_recursive_argument_as_own_option() {
+        let args = vec![
+            String::from("./mini-ls"),
+            String::from("-r"),
+            String::from("/opt/dev"),
+        ];
+        let config = Config::build(args).unwrap();
+        assert!(config.recurse);
         assert_eq!(config.target, "/opt/dev");
     }
 
